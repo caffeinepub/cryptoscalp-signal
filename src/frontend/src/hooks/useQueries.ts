@@ -122,8 +122,9 @@ export function useCoinSignal(coinId: string | null) {
 }
 
 // ── Batch signals for the whole coin list ──
-// Processes coins in small chunks (3) with generous 1.2s delays between chunks
-// to avoid overwhelming CryptoCompare's free-tier rate limits.
+// Processes coins in chunks of 15 with 200ms delays between chunks.
+// Uses only 60 candles per coin (10 days of 4h data) for fast signal scanning.
+// Daily bias is derived from the last 6 x 4h candles as a proxy.
 export function useAllSignals(coinIds: string[]) {
   // Tracks the first detectedAt + frozen entryPrice for each coinId with an active signal
   const detectedAtMap = useRef<
@@ -139,26 +140,26 @@ export function useAllSignals(coinIds: string[]) {
       progressRef.current = 0;
       setProgress(0);
 
-      // Small chunk size + generous delay = reliable fetching
-      const CHUNK = 5;
-      const DELAY = 600; // 0.6 seconds between chunks
+      // Larger chunk size + shorter delay = ~4x faster than before
+      const CHUNK = 15;
+      const DELAY = 200; // 0.2 seconds between chunks
 
       for (let i = 0; i < coinIds.length; i += CHUNK) {
         const chunk = coinIds.slice(i, i + CHUNK);
         await Promise.all(
           chunk.map(async (id) => {
             try {
-              const [candles4h, dailyCandles] = await Promise.all([
-                fetchOHLCWithRetry(id, 30),
-                fetchDailyWithRetry(id),
-              ]);
+              // Fetch only 60 candles (10 days of 4h) — sufficient for signal detection
+              // and ~9x less data than the previous 540-candle fetch.
+              const candles4h = await fetchOHLCWithVolume(id, 30, 60);
 
               if (candles4h.length < 15) return; // not enough data, skip
 
               const prevData = detectedAtMap.current.get(id);
+              // Pass empty dailyCandles — calcElizSignal uses last 6 x 4h as proxy
               const signal = calcElizSignal(
                 candles4h,
-                dailyCandles,
+                [],
                 prevData?.detectedAt,
                 prevData?.entryPrice,
               );

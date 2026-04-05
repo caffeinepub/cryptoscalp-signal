@@ -136,30 +136,45 @@ export function calcSupportResistanceLevels(
 
 /**
  * Detect if a liquidity grab occurred recently.
- * Lookback = 20 candles (~80h on 4h TF).
- * A grab = price wick breached the level AND same-candle or subsequent candle closed back inside.
- * Very loose tolerances to match EliZ's visual identification style.
+ * Lookback = 30 candles (~120h on 4h TF).
+ *
+ * IMPROVED: Accepts multi-candle grabs:
+ *   1. Same-candle: wick sweeps level AND closes back inside (original logic)
+ *   2. Two-candle: one candle wick sweeps the level, next candle closes back inside
+ * This matches how EliZ identifies grabs visually — sometimes the recovery
+ * happens in the following candle, not the same one.
  */
 export function detectLiquidityGrab(
   candles: OHLCVCandle[],
   level: number,
   direction: "above" | "below",
-  lookback = 20,
+  lookback = 30,
 ): boolean {
   if (candles.length < lookback) return false;
 
   const recent = candles.slice(-lookback);
-  for (const candle of recent) {
+  for (let i = 0; i < recent.length; i++) {
+    const candle = recent[i];
+    const next = recent[i + 1]; // may be undefined on last candle
+
     if (direction === "below") {
-      // Wick swept below level (any breach at all)
       const sweptBelow = candle.low < level;
-      // Close recovered back above — allow close anywhere above 97% of level
-      const closedAbove = candle.close > level * 0.97;
-      if (sweptBelow && closedAbove) return true;
+      if (!sweptBelow) continue;
+
+      // Same-candle recovery (close >= 97% of level)
+      if (candle.close >= level * 0.97) return true;
+
+      // Two-candle recovery: next candle closes above level
+      if (next && next.close >= level * 0.97) return true;
     } else {
       const sweptAbove = candle.high > level;
-      const closedBelow = candle.close < level * 1.03;
-      if (sweptAbove && closedBelow) return true;
+      if (!sweptAbove) continue;
+
+      // Same-candle recovery
+      if (candle.close <= level * 1.03) return true;
+
+      // Two-candle recovery
+      if (next && next.close <= level * 1.03) return true;
     }
   }
   return false;
@@ -167,8 +182,8 @@ export function detectLiquidityGrab(
 
 /**
  * Detect if price is currently retesting a level.
- * EliZ enters on or near the level after a grab — within 8% tolerance.
- * No strict directionality required: the market approaches the level from either side.
+ * C3 uses a wider tolerance (18%) to be clearly independent from C1 (12%).
+ * This ensures C1 and C3 don't always overlap.
  */
 export function detectRetest(candles: OHLCVCandle[], level: number): boolean {
   if (candles.length < 2) return false;
@@ -176,9 +191,8 @@ export function detectRetest(candles: OHLCVCandle[], level: number): boolean {
   const cur = candles[candles.length - 1];
   const price = cur.close;
 
-  // Price within 8% of level
   const proximity = Math.abs(price - level) / level;
-  return proximity <= 0.08;
+  return proximity <= 0.18;
 }
 
 /**
@@ -215,20 +229,22 @@ export function calcHTFBias(
  * EliZ signal detection.
  *
  * 5 confluences:
- * C1: Price is near any S/R level (within 8%)
- * C2: Liquidity grab detected on any of the top levels (last 20 candles ~80h)
- * C3: Price retesting any S/R level (within 8%)
- * C4: OBV rising in last 5 candles
+ * C1: Price is near a SUPPORT level (within 12%) — strictly below or slightly above
+ * C2: Liquidity grab detected on any of the top levels (last 30 candles ~120h)
+ *     Now supports two-candle grabs (sweep candle + recovery candle).
+ * C3: Price retesting ANY S/R level (within 18%) — wider than C1 so they differ
+ *     C3 ≠ C1: C1 is support-specific, C3 is any S/R (resistance turned support too)
+ * C4: OBV rising in last 8 candles (extended from 5 for smoother trend detection)
  * C5: HTF daily bias bullish (background filter, not shown in UI)
  *
- * KEY CHANGE: C1 and C3 are now DIFFERENT checks — C1 uses the nearest support
- * level specifically, C3 checks ANY level. This avoids them always overlapping.
+ * BONUS: If price is within 1.5% of any S/R level ("on the level" per EliZ),
+ *        score gets +1 bonus point. This rewards high-precision setups.
  *
  * Signal fires if score >= 3.
  */
 export function calcElizSignal(
   candles4h: OHLCVCandle[],
-  dailyCandles: OHLCVCandle[],
+  dailyCandles: OHLCVCandle[] = [],
   prevDetectedAt?: number,
   prevEntry?: number,
 ): SignalResult | null {
@@ -256,40 +272,55 @@ export function calcElizSignal(
   // ── Confluence scoring ──
   let score = 0;
 
-  // C1: Nearest support within 8% of current price
+  // C1: Nearest SUPPORT within 12% of current price
+  // This is specifically about being near a support level
   const supportProximity = Math.abs(price - nearestSupport) / price;
-  const c1 = supportProximity <= 0.08;
+  const c1 = supportProximity <= 0.12;
   if (c1) score++;
 
   // C2: Liquidity grab on ANY of the top levels (below = support grab)
+  // Now accepts two-candle grabs (sweep + next candle recovery)
   const c2 = topLevels.some((lvl) =>
-    detectLiquidityGrab(candles4h, lvl, "below", 20),
+    detectLiquidityGrab(candles4h, lvl, "below", 30),
   );
   if (c2) score++;
 
-  // C3: Price is currently retesting ANY of the top levels (within 8%)
-  // This is independent of C1 — C1 is about proximity to support specifically,
-  // C3 is about any S/R level retest (resistance turned support, etc.)
+  // C3: Price is retesting ANY S/R level (within 18%)
+  // Intentionally wider (18%) than C1 (12%) so they measure different things:
+  // C1 = proximity to support specifically
+  // C3 = proximity to any level (resistance flipped to support, etc.)
   const c3 = topLevels.some((lvl) => detectRetest(candles4h, lvl));
   if (c3) score++;
 
-  // C4: OBV rising (last 5 candles trend)
+  // C4: OBV rising (last 8 candles — extended for smoother trend detection)
   const obvArr = calcOBV(candles4h);
-  const obvRecent = obvArr.slice(-5);
-  const obvStart = obvRecent[0];
-  const obvEnd = obvRecent[obvRecent.length - 1];
+  const obvRecent8 = obvArr.slice(-8);
+  const obvStart = obvRecent8[0];
+  const obvEnd = obvRecent8[obvRecent8.length - 1];
   const c4 = obvEnd > obvStart;
   if (c4) score++;
 
   // C5: HTF daily bias bullish (background only, not shown in UI)
-  const htfBias = calcHTFBias(dailyCandles);
+  const htfBias =
+    dailyCandles.length > 0
+      ? calcHTFBias(dailyCandles)
+      : calcHTFBias(candles4h.slice(-6));
   const c5 = htfBias === "bullish";
   if (c5) score++;
+
+  // BONUS: price is "on the level" — within 1.5% of any S/R (EliZ's precise zone entry)
+  const isOnLevel = topLevels.some(
+    (lvl) => Math.abs(price - lvl) / lvl <= 0.015,
+  );
+  if (isOnLevel) score++;
 
   // Signal fires at score >= 3
   const hasSignal = score >= 3;
 
   // OBV proxy as 0-100
+  const obvRecent5 = obvArr.slice(-5);
+  const obvS5 = obvRecent5[0];
+  const obvE5 = obvRecent5[obvRecent5.length - 1];
   let obvProxy = 50;
   if (obvArr.length >= 10) {
     const obvWindow = obvArr.slice(-10);
@@ -299,12 +330,12 @@ export function calcElizSignal(
       const obvChangePct = (obvLast - obvFirst) / Math.abs(obvFirst);
       obvProxy = Math.max(0, Math.min(100, 50 + obvChangePct * 100));
     } else {
-      obvProxy = obvEnd > obvStart ? 65 : 35;
+      obvProxy = obvE5 > obvS5 ? 65 : 35;
     }
   }
 
   const obvMomentum =
-    obvEnd - obvRecent.reduce((s, v) => s + v, 0) / obvRecent.length;
+    obvE5 - obvRecent5.reduce((s, v) => s + v, 0) / obvRecent5.length;
 
   const startIdx = Math.max(0, n - 20);
   const recentVols = candles4h.slice(startIdx, n).map((c) => c.volume);
@@ -356,7 +387,7 @@ export function calcSignal(
   prevDetectedAt?: number,
   prevEntry?: number,
 ): SignalResult | null {
-  return calcElizSignal(candles, candles, prevDetectedAt, prevEntry);
+  return calcElizSignal(candles, [], prevDetectedAt, prevEntry);
 }
 
 export interface BacktestResult {
@@ -385,7 +416,7 @@ export function runBacktest(
     const inBullishTrend = currentClose > ema50Val;
     if (!inBullishTrend) continue;
 
-    const sig = calcElizSignal(window, window);
+    const sig = calcElizSignal(window, []);
     if (!sig?.hasSignal) continue;
 
     totalSignals++;

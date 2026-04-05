@@ -571,17 +571,18 @@ export async function fetchCoinList(): Promise<CoinListItem[]> {
   });
 }
 
-// ── Fetch 4h OHLCV candles (90 days = 540 candles at 4h) ──
+// ── Fetch 4h OHLCV candles ──
 // CryptoCompare: /data/v2/histohour with aggregate=4
+// limit: number of 4h candles to fetch (default 540 = 90 days; use 60 for fast signal scan)
 export async function fetchOHLCWithVolume(
   coinId: string,
   _days = 90,
+  limit = 540,
 ): Promise<OHLCVPoint[]> {
   const sym = getCCSymbol(coinId);
   if (!sym) return [];
 
-  // 540 x 4h candles = 90 days
-  const url = `${CC_BASE}/v2/histohour?fsym=${sym}&tsym=USD&limit=540&aggregate=4`;
+  const url = `${CC_BASE}/v2/histohour?fsym=${sym}&tsym=USD&limit=${limit}&aggregate=4`;
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`CC histohour error: ${res.status}`);
