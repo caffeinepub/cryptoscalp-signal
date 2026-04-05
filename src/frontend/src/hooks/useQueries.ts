@@ -1,7 +1,10 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { fetchCoinList } from "../utils/binance";
-import { fetchDailyOHLC, fetchOHLCWithVolume } from "../utils/coingecko";
+import {
+  fetchDailyOHLC,
+  fetchOHLCWithVolume,
+  fetchTopByVolume,
+} from "../utils/coingecko";
 import {
   type BacktestResult,
   type OHLCVCandle,
@@ -9,6 +12,10 @@ import {
   calcElizSignal,
   runBacktest,
 } from "../utils/indicators";
+import {
+  type PersistedSignal,
+  usePersistedSignals,
+} from "./usePersistedSignals";
 
 // Re-export types that the rest of the app uses
 export type CryptoCoin = {
@@ -22,7 +29,7 @@ export type CryptoCoin = {
 
 export type Signal = SignalResult;
 export type OHLCV = OHLCVCandle;
-export type { BacktestResult };
+export type { BacktestResult, PersistedSignal };
 
 export interface CoinWithSignal extends CryptoCoin {
   signal?: Signal;
@@ -33,7 +40,12 @@ export interface TopCoinsResult {
   isFromCache: boolean;
 }
 
-// ── Fetch OHLCV from CoinGecko with retry logic ──
+// ── Hour bucket — changes every hour, triggers refresh ——
+function hourBucket(): number {
+  return Math.floor(Date.now() / (60 * 60 * 1000));
+}
+
+// ── Fetch OHLCV from CoinGecko with retry logic ——
 async function fetchOHLCWithRetry(
   coinId: string,
   days: number,
@@ -75,15 +87,17 @@ async function fetchDailyWithRetry(coinId: string, maxRetries = 2) {
   return [];
 }
 
-// ── Top coins (market data only, no signals yet) ──
+// ── Top 25 coins by 24h volume (dynamic, refreshes every hour) ──
 export function useTopCoins() {
   return useQuery<TopCoinsResult>({
-    queryKey: ["topCoins"],
+    queryKey: ["topCoins", hourBucket()],
     queryFn: async () => {
-      const coins = await fetchCoinList();
+      const coins = await fetchTopByVolume(25);
       return { coins, isFromCache: false };
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 60 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+    refetchInterval: 60 * 60 * 1000,
     retry: 2,
   });
 }
@@ -120,55 +134,52 @@ export function useCoinSignal(coinId: string | null) {
   });
 }
 
-// ── Batch signals for the whole coin list ──
-// Processes coins in chunks of 10 with 300ms delays between chunks.
-// Uses CoinGecko OHLCV — clean data, volume included, no geo-restrictions.
-export function useAllSignals(coinIds: string[]) {
-  const detectedAtMap = useRef<
-    Map<string, { detectedAt: number; entryPrice: number }>
-  >(new Map());
+// ── Batch signals for the top 25 coins ──
+// Signals are PERSISTED in localStorage for up to 24 hours.
+// A signal remains visible until:
+//   - 24h have passed since detection
+//   - The live price touches TP1 (+3%) or SL (-2%)
+//
+export function useAllSignals(
+  coinIds: string[],
+  livePrices?: Map<string, number>,
+) {
+  const { mergeFreshSignals, validateWithLivePrices, activeSignalMap, store } =
+    usePersistedSignals();
+
   const progressRef = useRef(0);
   const [progress, setProgress] = useState(0);
 
+  // Validate signals against live prices on every price update
+  const livePricesRef = useRef(livePrices);
+  if (livePrices && livePrices !== livePricesRef.current) {
+    livePricesRef.current = livePrices;
+    if (livePrices.size > 0) {
+      validateWithLivePrices(livePrices);
+    }
+  }
+
   const query = useQuery<Map<string, Signal>>({
-    queryKey: ["signal-batch-cg", coinIds.length],
+    queryKey: ["signal-batch-cg", coinIds.join(",")],
     queryFn: async () => {
-      const result = new Map<string, Signal>();
+      const freshMap = new Map<string, Signal>();
       progressRef.current = 0;
       setProgress(0);
 
-      // CoinGecko rate limit: ~10-15 req/min on free tier without API key
-      // Chunk of 8 with 400ms delay = ~8 req per 400ms = safe
-      const CHUNK = 8;
-      const DELAY = 400;
+      // With 25 coins: 3 chunks of 10/10/5 = ~3s total
+      const CHUNK = 10;
+      const DELAY = 300;
 
       for (let i = 0; i < coinIds.length; i += CHUNK) {
         const chunk = coinIds.slice(i, i + CHUNK);
         await Promise.all(
           chunk.map(async (id) => {
             try {
-              // CoinGecko OHLC for 90 days gives ~4h candles natively
               const candles4h = await fetchOHLCWithVolume(id, 90);
-
-              if (candles4h.length < 10) return; // not enough data, skip
-
-              const prevData = detectedAtMap.current.get(id);
-              const signal = calcElizSignal(
-                candles4h,
-                [], // daily passed empty; HTF proxy uses last 4h candles
-                prevData?.detectedAt,
-                prevData?.entryPrice,
-              );
+              if (candles4h.length < 10) return;
+              const signal = calcElizSignal(candles4h, []);
               if (signal?.hasSignal) {
-                if (!detectedAtMap.current.has(id)) {
-                  detectedAtMap.current.set(id, {
-                    detectedAt: signal.detectedAt ?? Date.now(),
-                    entryPrice: signal.entryPrice,
-                  });
-                }
-                result.set(id, signal);
-              } else {
-                detectedAtMap.current.delete(id);
+                freshMap.set(id, signal);
               }
             } catch {
               // skip failed coins silently
@@ -181,18 +192,27 @@ export function useAllSignals(coinIds: string[]) {
           await new Promise((r) => setTimeout(r, DELAY));
         }
       }
-      return result;
+
+      // Merge fresh detections into the persistent store
+      mergeFreshSignals(freshMap);
+
+      // Return all currently active persisted signals
+      return activeSignalMap();
     },
     staleTime: 5 * 60 * 1000,
     retry: 0,
     enabled: coinIds.length > 0,
   });
 
+  // Always serve from the persisted store (even between analysis cycles)
+  const data = activeSignalMap();
+
   return {
-    data: query.data ?? new Map<string, Signal>(),
+    data,
     isLoading: query.isLoading || query.isFetching,
     progress,
     total: coinIds.length,
+    store,
   };
 }
 

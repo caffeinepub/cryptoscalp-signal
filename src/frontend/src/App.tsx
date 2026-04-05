@@ -43,12 +43,23 @@ export default function App() {
 
   const batchCoinIds = useMemo(() => coins.map((c) => c.id), [coins]);
 
+  // Build symbolMap for live price hook (coinId → ticker symbol)
+  const symbolMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of coins) m.set(c.id, c.symbol);
+    return m;
+  }, [coins]);
+
+  // We need live prices BEFORE useAllSignals so we can pass them in for SL/TP validation.
+  // Use all coin IDs for live prices (not just signal coins) so we can validate all signals.
+  const livePrices = useBinancePrices(batchCoinIds, symbolMap);
+
   const {
     data: signalMap,
     isLoading: signalsLoading,
     progress,
     total,
-  } = useAllSignals(batchCoinIds);
+  } = useAllSignals(batchCoinIds, livePrices);
 
   // Chart modal data
   const { data: ohlcv = [], isLoading: ohlcvLoading } = useCoinOHLCV(
@@ -76,16 +87,6 @@ export default function App() {
     () => signalCoins.map((c) => c.id),
     [signalCoins],
   );
-
-  // Build symbolMap for live price hook (coinId → ticker symbol)
-  const symbolMap = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of coins) m.set(c.id, c.symbol);
-    return m;
-  }, [coins]);
-
-  // Live prices (only for coins with active signals)
-  const livePrices = useBinancePrices(signalCoinIds, symbolMap);
 
   // Run backtest for coins with active signals to display win rate in the dashboard
   const backtestResults = useBacktestResults(signalCoinIds);

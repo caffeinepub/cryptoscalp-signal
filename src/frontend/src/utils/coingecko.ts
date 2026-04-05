@@ -2,7 +2,8 @@
 
 const BASE = "https://api.coingecko.com/api/v3";
 const CACHE_KEY = "cryptoscalp_top_coins_cache";
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const VOLUME_CACHE_KEY = "cryptoscalp_top_volume_cache";
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour — matches refresh interval
 
 export interface CoinListItem {
   id: string;
@@ -11,6 +12,7 @@ export interface CoinListItem {
   currentPrice: number;
   priceChange24h: number;
   marketCapRank: number;
+  volume24h?: number;
 }
 
 export interface OHLCVPoint {
@@ -78,6 +80,12 @@ const STABLE_IDS = new Set([
   "alusd",
   "musd",
   "ousd",
+  "wrapped-bitcoin",
+  "wrapped-ethereum",
+  "weth",
+  "wbtc",
+  "staked-ether",
+  "coinbase-wrapped-staked-eth",
 ]);
 
 // Stablecoin symbol patterns
@@ -117,6 +125,10 @@ const STABLE_SYMBOLS = new Set([
   "mxnc",
   "crvusd",
   "alusd",
+  "wbtc",
+  "weth",
+  "steth",
+  "cbeth",
 ]);
 
 export function isStablecoin(id: string, symbol: string): boolean {
@@ -125,14 +137,17 @@ export function isStablecoin(id: string, symbol: string): boolean {
   if (STABLE_SYMBOLS.has(sym)) return true;
   if (sym.endsWith("usd") || sym.startsWith("usd")) return true;
   if (sym.endsWith("eur") && sym !== "eur") return true;
+  // Exclude wrapped tokens
+  if (sym.startsWith("w") && sym.length > 1 && !sym.startsWith("woo"))
+    return false; // keep WOO etc
   return false;
 }
 
 // ── localStorage cache helpers ──
 
-function loadCoinsCache(): CoinsCache | null {
+function loadCache(key: string): CoinsCache | null {
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
     return JSON.parse(raw) as CoinsCache;
   } catch {
@@ -140,13 +155,24 @@ function loadCoinsCache(): CoinsCache | null {
   }
 }
 
-function saveCoinsCache(data: CoinListItem[]): void {
+function saveCache(key: string, data: CoinListItem[]): void {
   try {
     const cache: CoinsCache = { data, fetchedAt: Date.now() };
-    localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    localStorage.setItem(key, JSON.stringify(cache));
   } catch {
     // localStorage might be full or disabled
   }
+}
+
+/** Returns cached volume coins if fresh (within 1 hour) */
+export function getCachedVolumeCoins(): {
+  data: CoinListItem[];
+  isStale: boolean;
+} | null {
+  const cache = loadCache(VOLUME_CACHE_KEY);
+  if (!cache || cache.data.length === 0) return null;
+  const isStale = Date.now() - cache.fetchedAt > CACHE_TTL;
+  return { data: cache.data, isStale };
 }
 
 /** Returns cached coins if they exist (regardless of age) */
@@ -154,7 +180,7 @@ export function getCachedCoins(): {
   data: CoinListItem[];
   isStale: boolean;
 } | null {
-  const cache = loadCoinsCache();
+  const cache = loadCache(CACHE_KEY);
   if (!cache || cache.data.length === 0) return null;
   const isStale = Date.now() - cache.fetchedAt > CACHE_TTL;
   return { data: cache.data, isStale };
@@ -188,6 +214,45 @@ async function fetchWithRetry(
   throw new Error("Max retries exceeded");
 }
 
+/**
+ * Fetch the top 25 non-stablecoin coins by 24h trading volume from CoinGecko.
+ * Fetches a larger set (top 80 by volume) to ensure we get 25 after filtering.
+ * Results are cached for 1 hour.
+ */
+export async function fetchTopByVolume(limit = 25): Promise<CoinListItem[]> {
+  // Try cache first — only use if not stale (within 1 hour)
+  const cached = getCachedVolumeCoins();
+  if (cached && !cached.isStale) {
+    return cached.data.slice(0, limit);
+  }
+
+  // Fetch top 80 by volume to get enough after filtering stablecoins
+  const url = `${BASE}/coins/markets?vs_currency=usd&order=volume_desc&per_page=80&page=1&sparkline=false&price_change_percentage=24h`;
+  const res = await fetchWithRetry(url, 3, 2000);
+  if (!res.ok) {
+    // On error, return stale cache if available
+    if (cached) return cached.data.slice(0, limit);
+    throw new Error(`CoinGecko error ${res.status}`);
+  }
+
+  const data: any[] = await res.json();
+  const coins: CoinListItem[] = data
+    .filter((c) => !isStablecoin(c.id, c.symbol))
+    .slice(0, limit)
+    .map((c, idx) => ({
+      id: c.id,
+      symbol: c.symbol,
+      name: c.name,
+      currentPrice: c.current_price ?? 0,
+      priceChange24h: c.price_change_percentage_24h ?? 0,
+      marketCapRank: c.market_cap_rank ?? idx + 1,
+      volume24h: c.total_volume ?? 0,
+    }));
+
+  saveCache(VOLUME_CACHE_KEY, coins);
+  return coins;
+}
+
 export async function fetchTopCoins(perPage = 200): Promise<CoinListItem[]> {
   const url = `${BASE}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${perPage}&page=1&sparkline=false`;
   const res = await fetchWithRetry(url);
@@ -203,7 +268,7 @@ export async function fetchTopCoins(perPage = 200): Promise<CoinListItem[]> {
       priceChange24h: c.price_change_percentage_24h ?? 0,
       marketCapRank: c.market_cap_rank ?? idx + 1,
     }));
-  saveCoinsCache(coins);
+  saveCache(CACHE_KEY, coins);
   return coins;
 }
 
@@ -226,7 +291,6 @@ export async function fetchOHLCWithVolume(
   _days: 1 | 7 | 14 | 30 | 90 | 180 | 365 = 30,
 ): Promise<OHLCVPoint[]> {
   // days=30 gives native 4h candles from CoinGecko (most reliable)
-  // days=90 would give daily candles — we always want 4h
   const ohlcDays = 30;
 
   try {
@@ -259,7 +323,6 @@ export async function fetchOHLCWithVolume(
       try {
         const volData: { total_volumes: number[][] } = await volRes.json();
         for (const [ts, vol] of volData.total_volumes) {
-          // Round to day boundary
           const dayTs = Math.floor(ts / 86400000) * 86400000;
           volMap.set(dayTs, vol);
         }
@@ -273,11 +336,10 @@ export async function fetchOHLCWithVolume(
     // CoinGecko OHLC format: [timestamp_ms, open, high, low, close]
     // For days=30: returns 4h candles (~180 points)
     const points: OHLCVPoint[] = ohlcRaw
-      .filter((c) => c.length >= 5 && c[4] > 0) // require valid close
+      .filter((c) => c.length >= 5 && c[4] > 0)
       .map(([ts, open, high, low, close]) => {
         const dayTs = Math.floor(ts / 86400000) * 86400000;
         const dayVol = volMap.get(dayTs) ?? 0;
-        // Distribute daily volume across ~6 candles per day
         const candleVol = dayVol > 0 ? dayVol / 6 : 1;
 
         return {
@@ -286,8 +348,6 @@ export async function fetchOHLCWithVolume(
           high,
           low,
           close,
-          // Synthetic per-candle volume from daily total
-          // Good enough for OBV slope direction (we only care about relative changes)
           volume: candleVol,
         };
       })
@@ -302,8 +362,6 @@ export async function fetchOHLCWithVolume(
 
 /**
  * Fetch daily OHLC candles for HTF bias calculation.
- * CoinGecko /coins/{id}/ohlc?vs_currency=usd&days=30 with large days returns daily.
- * Use days=90 to get daily candles explicitly.
  */
 export async function fetchDailyOHLC(coinId: string): Promise<OHLCVPoint[]> {
   try {
