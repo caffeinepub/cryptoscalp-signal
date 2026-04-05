@@ -1,7 +1,7 @@
 // CryptoCompare REST API utilities — replaces Binance
 // No API key required for public endpoints. No geo-restrictions.
-// Prices/24h% use CoinCap API (no rate limits, no geo-blocks).
-// OHLCV and live prices use CryptoCompare.
+// Prices/24h% use CoinGecko API with batched requests (no rate-limit issues).
+// OHLCV uses CryptoCompare.
 
 export interface CoinListEntry {
   id: string;
@@ -496,58 +496,78 @@ export function getCCSymbol(coinId: string): string | null {
 }
 
 const CC_BASE = "https://min-api.cryptocompare.com/data";
-const COINCAP_BASE = "https://api.coincap.io/v2";
+const CG_BASE = "https://api.coingecko.com/api/v3";
 
-// ── Fetch current prices for ALL coins using CoinCap API ──
-// CoinCap has no rate limits on public endpoints and no geo-restrictions.
-// Keyed by CoinCap id (same as our COIN_LIST id field).
+const BATCH_SIZE = 30;
+const BATCH_DELAY_MS = 500;
+
+// ── Fetch current prices for ALL coins using CoinGecko API ──
+// Uses batched requests (30 IDs per call) with delays to avoid rate limits.
 export async function fetchCoinList(): Promise<CoinListItem[]> {
   const coins = COIN_LIST.filter((c) => !isStablecoin(c.id, c.symbol));
-  const coinIds = coins.map((c) => c.id).join(",");
-  const url = `${COINCAP_BASE}/assets?ids=${coinIds}&limit=200`;
 
-  interface CoinCapAsset {
-    id: string;
-    symbol: string;
-    priceUsd: string;
-    changePercent24Hr: string;
-  }
+  // Build a map for quick lookup
+  const resultMap = new Map<string, { price: number; change24h: number }>();
 
-  let dataMap = new Map<string, CoinCapAsset>();
+  // Split into batches of BATCH_SIZE
+  for (let i = 0; i < coins.length; i += BATCH_SIZE) {
+    const batch = coins.slice(i, i + BATCH_SIZE);
+    const ids = batch.map((c) => c.id).join(",");
+    const url = `${CG_BASE}/coins/markets?vs_currency=usd&ids=${ids}&per_page=${BATCH_SIZE}&page=1&sparkline=false`;
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`CoinCap HTTP ${res.status}`);
-      const json = (await res.json()) as { data?: CoinCapAsset[] };
-      const assets = json.data ?? [];
-      if (assets.length > 0) {
-        for (const asset of assets) {
-          dataMap.set(asset.id, asset);
+    let success = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch(url);
+        if (res.status === 429) {
+          // Rate limited — wait longer and retry
+          await new Promise((r) => setTimeout(r, 2000 * attempt));
+          continue;
         }
-        break; // success
+        if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status}`);
+        const data = (await res.json()) as Array<{
+          id: string;
+          current_price: number;
+          price_change_percentage_24h: number;
+        }>;
+        for (const item of data) {
+          resultMap.set(item.id, {
+            price: item.current_price ?? 0,
+            change24h: item.price_change_percentage_24h ?? 0,
+          });
+        }
+        success = true;
+        break;
+      } catch {
+        if (attempt < 3) {
+          await new Promise((r) => setTimeout(r, 1000 * attempt));
+        }
       }
-      throw new Error("Empty CoinCap response");
-    } catch {
-      if (attempt < 3) {
-        await new Promise((r) => setTimeout(r, 600 * attempt));
-      }
-      // On final failure, dataMap stays empty → prices default to 0
+    }
+
+    if (!success) {
+      // Batch failed: coins in this batch will show 0 — acceptable fallback
+      console.warn(
+        `CoinGecko batch ${i / BATCH_SIZE + 1} failed after 3 attempts`,
+      );
+    }
+
+    // Delay between batches to avoid rate limiting
+    if (i + BATCH_SIZE < coins.length) {
+      await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
     }
   }
 
   return coins.map((coin) => {
-    const asset = dataMap.get(coin.id);
+    const data = resultMap.get(coin.id);
     return {
       id: coin.id,
       symbol: coin.symbol,
       name: coin.name,
-      currentPrice: asset ? Number.parseFloat(asset.priceUsd) || 0 : 0,
-      priceChange24h: asset
-        ? Number.parseFloat(asset.changePercent24Hr) || 0
-        : 0,
+      currentPrice: data?.price ?? 0,
+      priceChange24h: data?.change24h ?? 0,
       marketCapRank: coin.rank,
-    } as CoinListItem;
+    };
   });
 }
 
