@@ -502,55 +502,75 @@ export function getCCSymbol(coinId: string): string | null {
 
 const CC_BASE = "https://min-api.cryptocompare.com/data";
 
-// ── Fetch current prices for all coins in batches of 50 ──
-// Uses pricemultifull endpoint which returns price + 24h change
-export async function fetchCoinList(): Promise<CoinListItem[]> {
-  const coins = COIN_LIST.filter((c) => !isStablecoin(c.id, c.symbol));
-  const BATCH = 50;
-  const results: CoinListItem[] = [];
-
-  for (let i = 0; i < coins.length; i += BATCH) {
-    const batch = coins.slice(i, i + BATCH);
-    const fsyms = batch.map((c) => c.ccSymbol).join(",");
-    const url = `${CC_BASE}/pricemultifull?fsyms=${fsyms}&tsyms=USD`;
-
+// ── Helper: fetch with retry + exponential backoff ──
+async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response> {
+  let lastError: Error = new Error("Unknown error");
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const res = await fetch(url);
-      if (!res.ok) throw new Error(`CryptoCompare error: ${res.status}`);
-      const json = (await res.json()) as {
-        RAW?: Record<
-          string,
-          { USD?: { PRICE: number; CHANGEPCT24HOUR: number } }
-        >;
-      };
+      if (res.ok) return res;
+      lastError = new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+    }
+    if (attempt < maxRetries - 1) {
+      await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+    }
+  }
+  throw lastError;
+}
 
-      for (const coin of batch) {
-        const raw = json.RAW?.[coin.ccSymbol]?.USD;
-        results.push({
-          id: coin.id,
-          symbol: coin.symbol,
-          name: coin.name,
-          currentPrice: raw?.PRICE ?? 0,
-          priceChange24h: raw?.CHANGEPCT24HOUR ?? 0,
-          marketCapRank: coin.rank,
+// ── Fetch current prices for all coins in parallel batches of 30 ──
+// Each batch retries up to 3 times with exponential backoff on failure.
+export async function fetchCoinList(): Promise<CoinListItem[]> {
+  const coins = COIN_LIST.filter((c) => !isStablecoin(c.id, c.symbol));
+  const BATCH = 30;
+
+  // Split into batches
+  const batches: CoinListEntry[][] = [];
+  for (let i = 0; i < coins.length; i += BATCH) {
+    batches.push(coins.slice(i, i + BATCH));
+  }
+
+  // Fetch all batches in parallel, each with retry
+  const batchResults = await Promise.all(
+    batches.map(async (batch) => {
+      const fsyms = batch.map((c) => c.ccSymbol).join(",");
+      const url = `${CC_BASE}/pricemultifull?fsyms=${fsyms}&tsyms=USD`;
+      try {
+        const res = await fetchWithRetry(url, 3);
+        const json = (await res.json()) as {
+          RAW?: Record<
+            string,
+            { USD?: { PRICE: number; CHANGEPCT24HOUR: number } }
+          >;
+        };
+        return batch.map((coin) => {
+          const raw = json.RAW?.[coin.ccSymbol]?.USD;
+          return {
+            id: coin.id,
+            symbol: coin.symbol,
+            name: coin.name,
+            currentPrice: raw?.PRICE ?? 0,
+            priceChange24h: raw?.CHANGEPCT24HOUR ?? 0,
+            marketCapRank: coin.rank,
+          } as CoinListItem;
         });
-      }
-    } catch {
-      // On error, push coins with zero price (will show up but not crash)
-      for (const coin of batch) {
-        results.push({
+      } catch {
+        // All retries failed — return zeros for this batch
+        return batch.map((coin) => ({
           id: coin.id,
           symbol: coin.symbol,
           name: coin.name,
           currentPrice: 0,
           priceChange24h: 0,
           marketCapRank: coin.rank,
-        });
+        })) as CoinListItem[];
       }
-    }
-  }
+    }),
+  );
 
-  return results;
+  return batchResults.flat();
 }
 
 // ── Fetch 4h OHLCV candles (90 days = 540 candles at 4h) ──
