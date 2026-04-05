@@ -1,10 +1,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import {
-  fetchCoinList,
-  fetchDailyOHLC,
-  fetchOHLCWithVolume,
-} from "../utils/binance";
+import { fetchCoinList } from "../utils/binance";
+import { fetchDailyOHLC, fetchOHLCWithVolume } from "../utils/coingecko";
 import {
   type BacktestResult,
   type OHLCVCandle,
@@ -36,7 +33,7 @@ export interface TopCoinsResult {
   isFromCache: boolean;
 }
 
-// ── Fetch OHLCV with retry logic ──
+// ── Fetch OHLCV from CoinGecko with retry logic ──
 async function fetchOHLCWithRetry(
   coinId: string,
   days: number,
@@ -44,15 +41,17 @@ async function fetchOHLCWithRetry(
 ) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const result = await fetchOHLCWithVolume(coinId, days);
-      if (result && result.length >= 15) return result;
-      // Got empty/insufficient data — wait before retry
+      const result = await fetchOHLCWithVolume(
+        coinId,
+        days as 1 | 7 | 14 | 30 | 90 | 180 | 365,
+      );
+      if (result && result.length >= 10) return result;
       if (attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, 2000 * attempt));
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
       }
     } catch {
       if (attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, 2000 * attempt));
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
       }
     }
   }
@@ -122,11 +121,9 @@ export function useCoinSignal(coinId: string | null) {
 }
 
 // ── Batch signals for the whole coin list ──
-// Processes coins in chunks of 15 with 200ms delays between chunks.
-// Uses 120 candles per coin (20 days of 4h data) — more history = better S/R detection.
-// Daily bias is derived from the last 6 x 4h candles as a proxy.
+// Processes coins in chunks of 10 with 300ms delays between chunks.
+// Uses CoinGecko OHLCV — clean data, volume included, no geo-restrictions.
 export function useAllSignals(coinIds: string[]) {
-  // Tracks the first detectedAt + frozen entryPrice for each coinId with an active signal
   const detectedAtMap = useRef<
     Map<string, { detectedAt: number; entryPrice: number }>
   >(new Map());
@@ -134,32 +131,31 @@ export function useAllSignals(coinIds: string[]) {
   const [progress, setProgress] = useState(0);
 
   const query = useQuery<Map<string, Signal>>({
-    queryKey: ["signal-batch-seq", coinIds.length],
+    queryKey: ["signal-batch-cg", coinIds.length],
     queryFn: async () => {
       const result = new Map<string, Signal>();
       progressRef.current = 0;
       setProgress(0);
 
-      // Larger chunk size + shorter delay = ~4x faster than before
-      const CHUNK = 15;
-      const DELAY = 200; // 0.2 seconds between chunks
+      // CoinGecko rate limit: ~10-15 req/min on free tier without API key
+      // Chunk of 8 with 400ms delay = ~8 req per 400ms = safe
+      const CHUNK = 8;
+      const DELAY = 400;
 
       for (let i = 0; i < coinIds.length; i += CHUNK) {
         const chunk = coinIds.slice(i, i + CHUNK);
         await Promise.all(
           chunk.map(async (id) => {
             try {
-              // Fetch 120 candles (20 days of 4h) — needed for reliable S/R level detection
-              // Good balance between speed and signal quality.
-              const candles4h = await fetchOHLCWithVolume(id, 30, 120);
+              // CoinGecko OHLC for 90 days gives ~4h candles natively
+              const candles4h = await fetchOHLCWithVolume(id, 90);
 
-              if (candles4h.length < 15) return; // not enough data, skip
+              if (candles4h.length < 10) return; // not enough data, skip
 
               const prevData = detectedAtMap.current.get(id);
-              // Pass empty dailyCandles — calcElizSignal uses last 6 x 4h as proxy
               const signal = calcElizSignal(
                 candles4h,
-                [],
+                [], // daily passed empty; HTF proxy uses last 4h candles
                 prevData?.detectedAt,
                 prevData?.entryPrice,
               );

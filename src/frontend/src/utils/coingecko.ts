@@ -123,7 +123,6 @@ export function isStablecoin(id: string, symbol: string): boolean {
   if (STABLE_IDS.has(id.toLowerCase())) return true;
   const sym = symbol.toLowerCase();
   if (STABLE_SYMBOLS.has(sym)) return true;
-  // Pattern-based: ends with usd, usd at start, or contains 'stable'
   if (sym.endsWith("usd") || sym.startsWith("usd")) return true;
   if (sym.endsWith("eur") && sym !== "eur") return true;
   return false;
@@ -171,9 +170,8 @@ async function fetchWithRetry(
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url);
-      // 429 = rate limit: wait and retry
       if (res.status === 429 && attempt < retries) {
-        const delay = baseDelay * 2 ** attempt; // 2s, 4s, 8s
+        const delay = baseDelay * 2 ** attempt;
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
@@ -205,79 +203,130 @@ export async function fetchTopCoins(perPage = 200): Promise<CoinListItem[]> {
       priceChange24h: c.price_change_percentage_24h ?? 0,
       marketCapRank: c.market_cap_rank ?? idx + 1,
     }));
-  // Save to cache on success
   saveCoinsCache(coins);
   return coins;
 }
 
-// CoinGecko OHLC endpoint returns [timestamp, open, high, low, close]
-// We synthesize volume from the market_chart endpoint.
-// For 4h candles: use days=90 with hourly interval, then group into 4h buckets.
+/**
+ * Fetch 4h OHLCV candles from CoinGecko.
+ *
+ * CoinGecko /ohlc endpoint:
+ *   - days=1    → 30-min candles
+ *   - days=7-30 → 4h candles (native)
+ *   - days=90+  → daily candles
+ *
+ * Strategy: use days=30 to get native 4h candles (up to 180 candles = 30 days).
+ * Volume is fetched from market_chart?interval=daily and distributed evenly
+ * across the 4h candles of each day (6 candles per day).
+ *
+ * Returns OHLCVPoint[] sorted oldest → newest.
+ */
 export async function fetchOHLCWithVolume(
   coinId: string,
-  _days: 1 | 7 | 14 | 30 | 90 | 180 | 365,
+  _days: 1 | 7 | 14 | 30 | 90 | 180 | 365 = 30,
 ): Promise<OHLCVPoint[]> {
-  // Always use 90 days for 4h candle generation
-  const fetchDays = 90;
+  // days=30 gives native 4h candles from CoinGecko (most reliable)
+  // days=90 would give daily candles — we always want 4h
+  const ohlcDays = 30;
 
-  const [ohlcRes, volRes] = await Promise.all([
-    fetchWithRetry(
-      `${BASE}/coins/${coinId}/ohlc?vs_currency=usd&days=${fetchDays}`,
-    ),
-    fetchWithRetry(
-      `${BASE}/coins/${coinId}/market_chart?vs_currency=usd&days=${fetchDays}&interval=hourly`,
-    ),
-  ]);
+  try {
+    // Fetch OHLC and volume in parallel
+    const [ohlcRes, volRes] = await Promise.all([
+      fetchWithRetry(
+        `${BASE}/coins/${coinId}/ohlc?vs_currency=usd&days=${ohlcDays}`,
+        2,
+        1000,
+      ),
+      fetchWithRetry(
+        `${BASE}/coins/${coinId}/market_chart?vs_currency=usd&days=${ohlcDays}&interval=daily`,
+        2,
+        1000,
+      ),
+    ]);
 
-  if (!ohlcRes.ok || !volRes.ok) throw new Error("CoinGecko fetch failed");
+    if (!ohlcRes.ok) {
+      console.warn(
+        `[CoinGecko] OHLC fetch failed for ${coinId}: ${ohlcRes.status}`,
+      );
+      return [];
+    }
 
-  const ohlcRaw: number[][] = await ohlcRes.json();
-  const volData: { total_volumes: number[][] } = await volRes.json();
+    const ohlcRaw: number[][] = await ohlcRes.json();
 
-  // Build volume map (rounded to nearest hour)
-  const volMap = new Map<number, number>();
-  for (const [ts, vol] of volData.total_volumes) {
-    const rounded = Math.round(ts / 3600000) * 3600000;
-    volMap.set(rounded, vol);
+    // Build daily volume map (day-start-ts -> total_volume)
+    const volMap = new Map<number, number>();
+    if (volRes.ok) {
+      try {
+        const volData: { total_volumes: number[][] } = await volRes.json();
+        for (const [ts, vol] of volData.total_volumes) {
+          // Round to day boundary
+          const dayTs = Math.floor(ts / 86400000) * 86400000;
+          volMap.set(dayTs, vol);
+        }
+      } catch {
+        // volume fetch failed — use synthetic volume (non-blocking)
+      }
+    }
+
+    if (!ohlcRaw || ohlcRaw.length === 0) return [];
+
+    // CoinGecko OHLC format: [timestamp_ms, open, high, low, close]
+    // For days=30: returns 4h candles (~180 points)
+    const points: OHLCVPoint[] = ohlcRaw
+      .filter((c) => c.length >= 5 && c[4] > 0) // require valid close
+      .map(([ts, open, high, low, close]) => {
+        const dayTs = Math.floor(ts / 86400000) * 86400000;
+        const dayVol = volMap.get(dayTs) ?? 0;
+        // Distribute daily volume across ~6 candles per day
+        const candleVol = dayVol > 0 ? dayVol / 6 : 1;
+
+        return {
+          timestamp: ts,
+          open,
+          high,
+          low,
+          close,
+          // Synthetic per-candle volume from daily total
+          // Good enough for OBV slope direction (we only care about relative changes)
+          volume: candleVol,
+        };
+      })
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    return points;
+  } catch (err) {
+    console.warn(`[CoinGecko] fetchOHLCWithVolume error for ${coinId}:`, err);
+    return [];
   }
+}
 
-  // CoinGecko OHLC for 90 days returns 4h candles natively
-  // Group into 4h buckets: aggregate OHLCV
-  const hourlyPoints: OHLCVPoint[] = ohlcRaw.map(
-    ([ts, open, high, low, close]) => {
-      const rounded = Math.round(ts / 3600000) * 3600000;
-      return {
+/**
+ * Fetch daily OHLC candles for HTF bias calculation.
+ * CoinGecko /coins/{id}/ohlc?vs_currency=usd&days=30 with large days returns daily.
+ * Use days=90 to get daily candles explicitly.
+ */
+export async function fetchDailyOHLC(coinId: string): Promise<OHLCVPoint[]> {
+  try {
+    const res = await fetchWithRetry(
+      `${BASE}/coins/${coinId}/ohlc?vs_currency=usd&days=90`,
+      2,
+      1000,
+    );
+    if (!res.ok) return [];
+    const raw: number[][] = await res.json();
+    if (!raw || raw.length === 0) return [];
+    return raw
+      .filter((c) => c.length >= 5 && c[4] > 0)
+      .map(([ts, open, high, low, close]) => ({
         timestamp: ts,
         open,
         high,
         low,
         close,
-        volume: volMap.get(rounded) ?? volMap.get(ts) ?? 0,
-      };
-    },
-  );
-
-  // CoinGecko already returns ~4h candles when days=90; return as-is
-  return hourlyPoints;
-}
-
-/**
- * Fetch daily OHLC candles for HTF bias calculation.
- * CoinGecko /coins/{id}/ohlc?vs_currency=usd&days=30 returns daily candles.
- * Volume is not critical here; set to 0.
- */
-export async function fetchDailyOHLC(coinId: string): Promise<OHLCVPoint[]> {
-  const res = await fetchWithRetry(
-    `${BASE}/coins/${coinId}/ohlc?vs_currency=usd&days=30`,
-  );
-  if (!res.ok) throw new Error(`CoinGecko daily OHLC error ${res.status}`);
-  const raw: number[][] = await res.json();
-  return raw.map(([ts, open, high, low, close]) => ({
-    timestamp: ts,
-    open,
-    high,
-    low,
-    close,
-    volume: 0,
-  }));
+        volume: 0,
+      }))
+      .sort((a, b) => a.timestamp - b.timestamp);
+  } catch {
+    return [];
+  }
 }

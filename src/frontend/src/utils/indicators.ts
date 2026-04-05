@@ -69,18 +69,14 @@ export function calcRSI(closes: number[], period = 14): number[] {
 
 /**
  * Validate and clean OHLCV candles.
- * Filters out candles with zero/invalid close or volume.
+ * Only filters out clearly invalid data (zero price, high < low).
+ * Does NOT enforce high >= close / low <= close — CoinGecko OHLC aggregation
+ * can produce minor discrepancies that would otherwise discard valid candles.
  */
 export function cleanCandles(candles: OHLCVCandle[]): OHLCVCandle[] {
   return candles.filter(
     (c) =>
-      c.close > 0 &&
-      c.open > 0 &&
-      c.high > 0 &&
-      c.low > 0 &&
-      c.high >= c.low &&
-      c.high >= c.close &&
-      c.low <= c.close,
+      c.close > 0 && c.open > 0 && c.high > 0 && c.low > 0 && c.high >= c.low, // only reject candles where high < low (clearly corrupt)
   );
 }
 
@@ -108,8 +104,8 @@ export function calcOBV(candles: OHLCVCandle[]): number[] {
  *
  * lookback=1: a candle only needs to be local max/min in a 3-candle window.
  * Also adds:
- *   - the highest high and lowest low of the last 10, 20, 42 candles
- *     (approx 2d, 4d, 1w of 4h data) — these are EliZ-style "key levels"
+ *   - the highest high and lowest low of the last 10, 20, 42, 90 candles
+ *     (approx 2d, 4d, 1w, 2w of 4h data) — these are EliZ-style "key levels"
  *   - round numbers near the current price
  */
 export function calcSupportResistanceLevels(
@@ -134,7 +130,6 @@ export function calcSupportResistanceLevels(
   }
 
   // ── Period extremes: highest high / lowest low over key windows ──
-  // These represent obvious structural levels EliZ would draw manually.
   const windows = [10, 20, 42, 90];
   for (const w of windows) {
     if (candles.length >= w) {
@@ -187,15 +182,11 @@ export function detectLiquidityGrab(
     const next = recent[i + 1];
 
     if (direction === "below") {
-      // Wick swept below level
       if (candle.low < level) {
-        // Same-candle recovery: close >= 95% of level
         if (candle.close >= level * 0.95) return true;
-        // Two-candle recovery: next candle closes above 95% of level
         if (next && next.close >= level * 0.95) return true;
       }
     } else {
-      // Wick swept above level
       if (candle.high > level) {
         if (candle.close <= level * 1.05) return true;
         if (next && next.close <= level * 1.05) return true;
@@ -236,27 +227,13 @@ export function calcHTFBias(
 /**
  * EliZ signal detection — 5 independent confluences.
  *
- * INPUT: candles are cleaned (no zero-close) before scoring.
- *
  * C1: Price within 10% of any S/R level
- *     — broad enough to fire for most coins near a level
- *
- * C2: OBV slope positive — avg(last 5 OBV values) > avg(prev 5 OBV values)
- *     — measures DIRECTION of volume momentum. ~50% in any market.
- *     — only calculated on candles with valid (non-zero) volume
- *
- * C3: Liquidity grab detected in last 40 candles on any nearby S/R level
- *     — fires when price swept a level and closed back above/below it
- *
- * C4: Price closed above the OPEN of the last candle (bullish close)
- *     OR last candle has a lower wick >= 50% of candle range (rejection wick)
- *     — genuinely independent from C1/C5. ~40-50% in bear markets.
- *
- * C5: At least one of the last 5 candles bounced from an S/R level
- *     (low touched within 3% of level AND closed above it)
- *     — decoupled from C1 by using a stricter touch definition
- *
- * BONUS: Price within 1.5% of any S/R level ("on the level")
+ * C2: OBV slope positive (avg last 5 OBV > avg prev 5)
+ * C3: Liquidity grab in last 40 candles
+ * C4: Bullish close OR rejection lower wick >= 40% of range OR prev candle bullish
+ * C5: Bounce from S/R in last 5 completed candles
+ * BONUS: Price within 1.5% of any S/R ("on the level")
+ * HTF BONUS: daily bias bullish (if daily candles provided)
  *
  * Signal fires at score >= 3.
  */
@@ -266,10 +243,10 @@ export function calcElizSignal(
   prevDetectedAt?: number,
   prevEntry?: number,
 ): SignalResult | null {
-  // ── Clean candles: remove zero/invalid entries ──
+  // ── Clean candles: remove zero/invalid entries only ──
   const candles4h = cleanCandles(candles4hRaw);
 
-  if (candles4h.length < 15) return null;
+  if (candles4h.length < 10) return null;
 
   const price = candles4h[candles4h.length - 1].close;
   const curCandle = candles4h[candles4h.length - 1];
@@ -278,10 +255,8 @@ export function calcElizSignal(
   const srLevels = calcSupportResistanceLevels(candles4h);
   if (srLevels.length === 0) return null;
 
-  // Top 20 closest S/R levels for analysis
   const topLevels = srLevels.slice(0, 20);
 
-  // Nearest support level (at or below price)
   const supportLevels = srLevels.filter((l) => l <= price * 1.05);
   const nearestSupport =
     supportLevels.length > 0
@@ -297,9 +272,9 @@ export function calcElizSignal(
   if (c1) score++;
 
   // ── C2: OBV momentum — avg of last 5 vs avg of 5 before that ──
-  // Only use candles where volume > 0 to avoid flat OBV from bad data
-  const candlesWithVolume = candles4h.filter((c) => c.volume > 0);
-  const obvArr = calcOBV(candlesWithVolume);
+  // Volume is now synthetic (daily vol / 6) from CoinGecko — but directional
+  // slope is still meaningful for momentum detection.
+  const obvArr = calcOBV(candles4h);
   let c2 = false;
   if (obvArr.length >= 10) {
     const last5 = obvArr.slice(-5);
@@ -308,7 +283,6 @@ export function calcElizSignal(
     const avgPrev5 = prev5.reduce((s, v) => s + v, 0) / 5;
     c2 = avgLast5 > avgPrev5;
   } else if (obvArr.length >= 4) {
-    // Not enough candles for 10-window — use what we have
     const half = Math.floor(obvArr.length / 2);
     const recent = obvArr.slice(-half);
     const older = obvArr.slice(-half * 2, -half);
@@ -324,23 +298,17 @@ export function calcElizSignal(
   );
   if (c3) score++;
 
-  // ── C4: Bullish close OR significant lower wick ──
-  // Bullish close: last candle closed above its open
+  // ── C4: Bullish close OR significant lower wick OR prev candle bullish ──
   const bullishClose = curCandle.close > curCandle.open;
-  // Significant lower wick: lower wick >= 40% of total candle range
-  // This catches hammer/pin-bar patterns even if close < open
   const candleRange = curCandle.high - curCandle.low;
   const lowerWick = Math.min(curCandle.open, curCandle.close) - curCandle.low;
   const hasRejectionWick = candleRange > 0 && lowerWick / candleRange >= 0.4;
-  // Also check if prev candle was bullish (momentum from previous bar)
   const prevBullish = prevCandle ? prevCandle.close > prevCandle.open : false;
   const c4 = bullishClose || hasRejectionWick || prevBullish;
   if (c4) score++;
 
-  // ── C5: Bounce from S/R in the last 5 candles ──
-  // Stricter definition: low must be within 3% of a level AND close >= level * 0.99
-  // Uses candles[-5:-1] (not including current candle) to avoid self-referencing
-  const recent5 = candles4h.slice(-6, -1); // last 5 completed candles
+  // ── C5: Bounce from S/R in the last 5 completed candles ──
+  const recent5 = candles4h.slice(-6, -1);
   const c5 = recent5.some((candle) =>
     topLevels.some((lvl) => {
       const touchedLevel = candle.low <= lvl * 1.03 && candle.low >= lvl * 0.97;
@@ -364,10 +332,10 @@ export function calcElizSignal(
 
   const hasSignal = score >= 3;
 
-  // ── Diagnostic log (temporary) ──
-  if (hasSignal || score === 2) {
+  // ── Diagnostic log ──
+  if (score >= 2) {
     console.log(
-      `[EliZ] ${candles4h[0]?.timestamp ? "coin" : "unknown"} score=${score}/5+bonus | ` +
+      `[EliZ] score=${score}/5+bonus | ` +
         `C1=${c1} C2=${c2} C3=${c3} C4=${c4} C5=${c5} bonus=${isOnLevel} ` +
         `price=${price.toFixed(4)} candles=${candles4h.length}`,
     );
@@ -452,7 +420,6 @@ export function runBacktest(
   let profitableSignals = 0;
   let totalReturn = 0;
 
-  // Clean candles before backtesting
   const cleanedCandles = cleanCandles(candles);
 
   for (let i = 20; i < cleanedCandles.length - 12; i++) {
