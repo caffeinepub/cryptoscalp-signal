@@ -44,7 +44,7 @@ export function useTopCoins() {
       const coins = await fetchCoinList();
       return { coins, isFromCache: false };
     },
-    staleTime: 4 * 60 * 1000,
+    staleTime: 5 * 60 * 1000,
     retry: 2,
   });
 }

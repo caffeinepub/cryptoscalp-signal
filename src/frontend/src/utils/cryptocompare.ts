@@ -240,234 +240,227 @@ export const COIN_LIST: CoinListEntry[] = [
   },
   { id: "ronin", symbol: "RON", name: "Ronin", ccSymbol: "RON", rank: 54 },
   {
-    id: "klay-token",
-    symbol: "KLAY",
-    name: "Klaytn",
-    ccSymbol: "KLAY",
-    rank: 55,
-  },
-  {
     id: "decentraland",
     symbol: "MANA",
     name: "Decentraland",
     ccSymbol: "MANA",
-    rank: 56,
+    rank: 55,
   },
-  { id: "tezos", symbol: "XTZ", name: "Tezos", ccSymbol: "XTZ", rank: 57 },
+  { id: "tezos", symbol: "XTZ", name: "Tezos", ccSymbol: "XTZ", rank: 56 },
   {
     id: "the-sandbox",
     symbol: "SAND",
     name: "The Sandbox",
     ccSymbol: "SAND",
-    rank: 58,
+    rank: 57,
   },
   {
     id: "synthetix-network-token",
     symbol: "SNX",
     name: "Synthetix",
     ccSymbol: "SNX",
-    rank: 59,
+    rank: 58,
   },
   {
     id: "conflux-token",
     symbol: "CFX",
     name: "Conflux",
     ccSymbol: "CFX",
-    rank: 60,
+    rank: 59,
   },
-  { id: "eos", symbol: "EOS", name: "EOS", ccSymbol: "EOS", rank: 61 },
-  { id: "iota", symbol: "IOTA", name: "IOTA", ccSymbol: "IOTA", rank: 62 },
-  { id: "zcash", symbol: "ZEC", name: "Zcash", ccSymbol: "ZEC", rank: 63 },
-  { id: "neo", symbol: "NEO", name: "Neo", ccSymbol: "NEO", rank: 64 },
-  { id: "kava", symbol: "KAVA", name: "Kava", ccSymbol: "KAVA", rank: 65 },
+  { id: "eos", symbol: "EOS", name: "EOS", ccSymbol: "EOS", rank: 60 },
+  { id: "iota", symbol: "IOTA", name: "IOTA", ccSymbol: "MIOTA", rank: 61 },
+  { id: "zcash", symbol: "ZEC", name: "Zcash", ccSymbol: "ZEC", rank: 62 },
+  { id: "neo", symbol: "NEO", name: "Neo", ccSymbol: "NEO", rank: 63 },
+  { id: "kava", symbol: "KAVA", name: "Kava", ccSymbol: "KAVA", rank: 64 },
   {
     id: "pancakeswap-token",
     symbol: "CAKE",
     name: "PancakeSwap",
     ccSymbol: "CAKE",
-    rank: 66,
+    rank: 65,
   },
   {
     id: "mina-protocol",
     symbol: "MINA",
     name: "Mina",
     ccSymbol: "MINA",
-    rank: 67,
+    rank: 66,
   },
   {
     id: "oasis-network",
     symbol: "ROSE",
     name: "Oasis Network",
     ccSymbol: "ROSE",
-    rank: 68,
+    rank: 67,
   },
-  { id: "waves", symbol: "WAVES", name: "Waves", ccSymbol: "WAVES", rank: 69 },
-  { id: "apecoin", symbol: "APE", name: "ApeCoin", ccSymbol: "APE", rank: 70 },
-  { id: "1inch", symbol: "1INCH", name: "1inch", ccSymbol: "1INCH", rank: 71 },
+  { id: "waves", symbol: "WAVES", name: "Waves", ccSymbol: "WAVES", rank: 68 },
+  { id: "apecoin", symbol: "APE", name: "ApeCoin", ccSymbol: "APE", rank: 69 },
+  { id: "1inch", symbol: "1INCH", name: "1inch", ccSymbol: "1INCH", rank: 70 },
   {
     id: "curve-dao-token",
     symbol: "CRV",
     name: "Curve DAO Token",
     ccSymbol: "CRV",
-    rank: 72,
+    rank: 71,
   },
   {
     id: "enjincoin",
     symbol: "ENJ",
     name: "Enjin Coin",
     ccSymbol: "ENJ",
-    rank: 73,
+    rank: 72,
   },
-  { id: "zilliqa", symbol: "ZIL", name: "Zilliqa", ccSymbol: "ZIL", rank: 74 },
+  { id: "zilliqa", symbol: "ZIL", name: "Zilliqa", ccSymbol: "ZIL", rank: 73 },
   {
     id: "basic-attention-token",
     symbol: "BAT",
     name: "Basic Attention Token",
     ccSymbol: "BAT",
-    rank: 75,
+    rank: 74,
   },
-  { id: "iotex", symbol: "IOTX", name: "IoTeX", ccSymbol: "IOTX", rank: 76 },
-  { id: "stepn", symbol: "GMT", name: "STEPN", ccSymbol: "GMT", rank: 77 },
+  { id: "iotex", symbol: "IOTX", name: "IoTeX", ccSymbol: "IOTX", rank: 75 },
+  { id: "stepn", symbol: "GMT", name: "STEPN", ccSymbol: "GMT", rank: 76 },
   {
     id: "compound-governance-token",
     symbol: "COMP",
     name: "Compound",
     ccSymbol: "COMP",
-    rank: 78,
+    rank: 77,
   },
-  { id: "dash", symbol: "DASH", name: "Dash", ccSymbol: "DASH", rank: 79 },
+  { id: "dash", symbol: "DASH", name: "Dash", ccSymbol: "DASH", rank: 78 },
   {
     id: "loopring",
     symbol: "LRC",
     name: "Loopring",
     ccSymbol: "LRC",
-    rank: 80,
+    rank: 79,
   },
-  { id: "harmony", symbol: "ONE", name: "Harmony", ccSymbol: "ONE", rank: 81 },
-  { id: "0x", symbol: "ZRX", name: "0x", ccSymbol: "ZRX", rank: 82 },
-  { id: "ankr", symbol: "ANKR", name: "Ankr", ccSymbol: "ANKR", rank: 83 },
+  { id: "harmony", symbol: "ONE", name: "Harmony", ccSymbol: "ONE", rank: 80 },
+  { id: "0x", symbol: "ZRX", name: "0x", ccSymbol: "ZRX", rank: 81 },
+  { id: "ankr", symbol: "ANKR", name: "Ankr", ccSymbol: "ANKR", rank: 82 },
   {
     id: "livepeer",
     symbol: "LPT",
     name: "Livepeer",
     ccSymbol: "LPT",
-    rank: 84,
+    rank: 83,
   },
   {
     id: "ocean-protocol",
     symbol: "OCEAN",
     name: "Ocean Protocol",
     ccSymbol: "OCEAN",
-    rank: 85,
+    rank: 84,
   },
-  { id: "kusama", symbol: "KSM", name: "Kusama", ccSymbol: "KSM", rank: 86 },
+  { id: "kusama", symbol: "KSM", name: "Kusama", ccSymbol: "KSM", rank: 85 },
   {
     id: "ravencoin",
     symbol: "RVN",
     name: "Ravencoin",
     ccSymbol: "RVN",
-    rank: 87,
+    rank: 86,
   },
   {
     id: "yearn-finance",
     symbol: "YFI",
     name: "yearn.finance",
     ccSymbol: "YFI",
-    rank: 88,
+    rank: 87,
   },
-  { id: "celo", symbol: "CELO", name: "Celo", ccSymbol: "CELO", rank: 89 },
-  { id: "holotoken", symbol: "HOT", name: "Holo", ccSymbol: "HOT", rank: 90 },
-  { id: "skale", symbol: "SKL", name: "SKALE", ccSymbol: "SKL", rank: 91 },
+  { id: "celo", symbol: "CELO", name: "Celo", ccSymbol: "CELO", rank: 88 },
+  { id: "holotoken", symbol: "HOT", name: "Holo", ccSymbol: "HOT", rank: 89 },
+  { id: "skale", symbol: "SKL", name: "SKALE", ccSymbol: "SKL", rank: 90 },
   {
     id: "mask-network",
     symbol: "MASK",
     name: "Mask Network",
     ccSymbol: "MASK",
-    rank: 92,
+    rank: 91,
   },
-  { id: "qtum", symbol: "QTUM", name: "Qtum", ccSymbol: "QTUM", rank: 93 },
-  { id: "siacoin", symbol: "SC", name: "Siacoin", ccSymbol: "SC", rank: 94 },
+  { id: "qtum", symbol: "QTUM", name: "Qtum", ccSymbol: "QTUM", rank: 92 },
+  { id: "siacoin", symbol: "SC", name: "Siacoin", ccSymbol: "SC", rank: 93 },
   {
     id: "audius",
     symbol: "AUDIO",
     name: "Audius",
     ccSymbol: "AUDIO",
-    rank: 95,
+    rank: 94,
   },
-  { id: "storj", symbol: "STORJ", name: "Storj", ccSymbol: "STORJ", rank: 96 },
-  { id: "nem", symbol: "XEM", name: "NEM", ccSymbol: "XEM", rank: 97 },
-  { id: "decred", symbol: "DCR", name: "Decred", ccSymbol: "DCR", rank: 98 },
-  { id: "icon", symbol: "ICX", name: "ICON", ccSymbol: "ICX", rank: 99 },
+  { id: "storj", symbol: "STORJ", name: "Storj", ccSymbol: "STORJ", rank: 95 },
+  { id: "nem", symbol: "XEM", name: "NEM", ccSymbol: "XEM", rank: 96 },
+  { id: "decred", symbol: "DCR", name: "Decred", ccSymbol: "DCR", rank: 97 },
+  { id: "icon", symbol: "ICX", name: "ICON", ccSymbol: "ICX", rank: 98 },
   {
     id: "ontology",
     symbol: "ONT",
     name: "Ontology",
     ccSymbol: "ONT",
-    rank: 100,
+    rank: 99,
   },
   {
     id: "band-protocol",
     symbol: "BAND",
     name: "Band Protocol",
     ccSymbol: "BAND",
-    rank: 101,
+    rank: 100,
   },
   {
     id: "balancer",
     symbol: "BAL",
     name: "Balancer",
     ccSymbol: "BAL",
-    rank: 102,
+    rank: 101,
   },
   {
     id: "numeraire",
     symbol: "NMR",
     name: "Numeraire",
     ccSymbol: "NMR",
-    rank: 103,
+    rank: 102,
   },
   {
     id: "jito-staked-sol",
     symbol: "JTO",
     name: "Jito",
     ccSymbol: "JTO",
-    rank: 104,
+    rank: 103,
   },
   {
     id: "pyth-network",
     symbol: "PYTH",
     name: "Pyth Network",
     ccSymbol: "PYTH",
-    rank: 105,
+    rank: 104,
   },
   {
     id: "ondo-finance",
     symbol: "ONDO",
     name: "Ondo",
     ccSymbol: "ONDO",
-    rank: 106,
+    rank: 105,
   },
   {
     id: "moonbeam",
     symbol: "GLMR",
     name: "Moonbeam",
     ccSymbol: "GLMR",
-    rank: 107,
+    rank: 106,
   },
-  { id: "chromia", symbol: "CHR", name: "Chromia", ccSymbol: "CHR", rank: 108 },
+  { id: "chromia", symbol: "CHR", name: "Chromia", ccSymbol: "CHR", rank: 107 },
   {
     id: "origin-protocol",
     symbol: "OGN",
     name: "Origin Protocol",
     ccSymbol: "OGN",
-    rank: 109,
+    rank: 108,
   },
   {
     id: "reserve-rights-token",
     symbol: "RSR",
     name: "Reserve Rights",
     ccSymbol: "RSR",
-    rank: 110,
+    rank: 109,
   },
 ];
 
@@ -520,57 +513,43 @@ async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response> {
   throw lastError;
 }
 
-// ── Fetch current prices for all coins in parallel batches of 30 ──
-// Each batch retries up to 3 times with exponential backoff on failure.
+// ── Fetch current prices for all coins in a single API call ──
+// Uses one request to avoid rate limiting from parallel batch requests.
 export async function fetchCoinList(): Promise<CoinListItem[]> {
   const coins = COIN_LIST.filter((c) => !isStablecoin(c.id, c.symbol));
-  const BATCH = 30;
+  const fsyms = coins.map((c) => c.ccSymbol).join(",");
+  const url = `${CC_BASE}/pricemultifull?fsyms=${fsyms}&tsyms=USD`;
 
-  // Split into batches
-  const batches: CoinListEntry[][] = [];
-  for (let i = 0; i < coins.length; i += BATCH) {
-    batches.push(coins.slice(i, i + BATCH));
+  try {
+    const res = await fetchWithRetry(url, 3);
+    const json = (await res.json()) as {
+      RAW?: Record<
+        string,
+        { USD?: { PRICE: number; CHANGEPCT24HOUR: number } }
+      >;
+    };
+    return coins.map((coin) => {
+      const raw = json.RAW?.[coin.ccSymbol]?.USD;
+      return {
+        id: coin.id,
+        symbol: coin.symbol,
+        name: coin.name,
+        currentPrice: raw?.PRICE ?? 0,
+        priceChange24h: raw?.CHANGEPCT24HOUR ?? 0,
+        marketCapRank: coin.rank,
+      } as CoinListItem;
+    });
+  } catch {
+    // All retries failed — return zeros for all coins
+    return coins.map((coin) => ({
+      id: coin.id,
+      symbol: coin.symbol,
+      name: coin.name,
+      currentPrice: 0,
+      priceChange24h: 0,
+      marketCapRank: coin.rank,
+    })) as CoinListItem[];
   }
-
-  // Fetch all batches in parallel, each with retry
-  const batchResults = await Promise.all(
-    batches.map(async (batch) => {
-      const fsyms = batch.map((c) => c.ccSymbol).join(",");
-      const url = `${CC_BASE}/pricemultifull?fsyms=${fsyms}&tsyms=USD`;
-      try {
-        const res = await fetchWithRetry(url, 3);
-        const json = (await res.json()) as {
-          RAW?: Record<
-            string,
-            { USD?: { PRICE: number; CHANGEPCT24HOUR: number } }
-          >;
-        };
-        return batch.map((coin) => {
-          const raw = json.RAW?.[coin.ccSymbol]?.USD;
-          return {
-            id: coin.id,
-            symbol: coin.symbol,
-            name: coin.name,
-            currentPrice: raw?.PRICE ?? 0,
-            priceChange24h: raw?.CHANGEPCT24HOUR ?? 0,
-            marketCapRank: coin.rank,
-          } as CoinListItem;
-        });
-      } catch {
-        // All retries failed — return zeros for this batch
-        return batch.map((coin) => ({
-          id: coin.id,
-          symbol: coin.symbol,
-          name: coin.name,
-          currentPrice: 0,
-          priceChange24h: 0,
-          marketCapRank: coin.rank,
-        })) as CoinListItem[];
-      }
-    }),
-  );
-
-  return batchResults.flat();
 }
 
 // ── Fetch 4h OHLCV candles (90 days = 540 candles at 4h) ──
