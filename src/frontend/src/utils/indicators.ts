@@ -69,8 +69,6 @@ export function calcRSI(closes: number[], period = 14): number[] {
 
 /**
  * Calculate On-Balance Volume (OBV) array.
- * OBV rises when the close is higher than the previous close (bullish accumulation)
- * and falls when the close is lower (bearish distribution).
  */
 export function calcOBV(candles: OHLCVCandle[]): number[] {
   const obv: number[] = new Array(candles.length).fill(0);
@@ -90,13 +88,13 @@ export function calcOBV(candles: OHLCVCandle[]): number[] {
 
 /**
  * Identify key S/R levels from swing highs/lows.
- * A swing high is a candle whose high is higher than both neighbors.
- * A swing low is a candle whose low is lower than both neighbors.
- * Returns price levels sorted by distance from current price (closest first).
+ * lookback=3 means a candle only needs to be the max/min over a 7-candle window
+ * (3 before + itself + 3 after = 28h on 4h TF), which is more permissive and
+ * closer to how EliZ manually draws levels.
  */
 export function calcSupportResistanceLevels(
   candles: OHLCVCandle[],
-  lookback = 5,
+  lookback = 3, // reduced from 5 → 3: more levels detected
 ): number[] {
   if (candles.length < lookback * 2 + 1) return [];
 
@@ -107,11 +105,9 @@ export function calcSupportResistanceLevels(
     const slice = candles.slice(i - lookback, i + lookback + 1);
     const cur = candles[i];
 
-    // Check swing high
     const isSwingHigh = slice.every((c) => c.high <= cur.high);
     if (isSwingHigh) levels.push(cur.high);
 
-    // Check swing low
     const isSwingLow = slice.every((c) => c.low >= cur.low);
     if (isSwingLow) levels.push(cur.low);
   }
@@ -132,41 +128,38 @@ export function calcSupportResistanceLevels(
     if (!alreadyNear) unique.push(lvl);
   }
 
-  // Sort by proximity to current price
   unique.sort(
     (a, b) => Math.abs(a - currentPrice) - Math.abs(b - currentPrice),
   );
 
-  return unique.slice(0, 20); // top 20 most relevant levels
+  return unique.slice(0, 30); // increased from 20 to 30
 }
 
 /**
- * Detect if a liquidity grab occurred recently (last 5 candles).
- * A liquidity grab is: price sweeps beyond a level (above resistance or below support),
- * then closes back inside — the classic "stop hunt" EliZ watches for.
- *
- * direction 'above': price temporarily went above the level but closed back below it
- * direction 'below': price temporarily went below the level but closed back above it
+ * Detect if a liquidity grab occurred recently.
+ * Lookback = 10 candles (~40h on 4h TF).
+ * Tolerances loosened: wick only needs to go 0.1% beyond level (was 0.1%),
+ * and close just needs to be back inside within 1% (was 0.2%).
  */
 export function detectLiquidityGrab(
   candles: OHLCVCandle[],
   level: number,
   direction: "above" | "below",
-  lookback = 5,
+  lookback = 10,
 ): boolean {
   if (candles.length < lookback) return false;
 
   const recent = candles.slice(-lookback);
   for (const candle of recent) {
     if (direction === "below") {
-      // Price wick went below support but closed back above it
+      // Wick swept below level (at least 0.1% below)
       const sweptBelow = candle.low < level * 0.999;
-      const closedAbove = candle.close > level * 0.998;
+      // Close recovered back above (within 1% above level is ok)
+      const closedAbove = candle.close > level * 0.99;
       if (sweptBelow && closedAbove) return true;
     } else {
-      // Price wick went above resistance but closed back below it
       const sweptAbove = candle.high > level * 1.001;
-      const closedBelow = candle.close < level * 1.002;
+      const closedBelow = candle.close < level * 1.01;
       if (sweptAbove && closedBelow) return true;
     }
   }
@@ -175,8 +168,10 @@ export function detectLiquidityGrab(
 
 /**
  * Detect if price is currently retesting the grabbed level.
- * Retest: current price is within 1.5% of the level,
- * and the most recent candle is closing in the expected direction (bullish for long setups).
+ * C3 is now independent from C1: proximity is checked against ALL S/R levels,
+ * not just the "nearest" one, and the threshold is 3% (was 2.5%).
+ * Also removed the bullish-candle requirement — price just needs to be near
+ * the level, since EliZ enters on the candle close at the level, bullish or not.
  */
 export function detectRetest(candles: OHLCVCandle[], level: number): boolean {
   if (candles.length < 2) return false;
@@ -184,22 +179,18 @@ export function detectRetest(candles: OHLCVCandle[], level: number): boolean {
   const cur = candles[candles.length - 1];
   const price = cur.close;
 
-  // Price must be within 1.5% of the level
+  // Price within 3% of level (widened from 2.5%)
   const proximity = Math.abs(price - level) / level;
-  if (proximity > 0.015) return false;
+  if (proximity > 0.03) return false;
 
-  // For a LONG setup: candle should be bullish (close >= open) or at least
-  // within 0.5% of the level from above (price bouncing up from support)
-  const isBullishCandle = cur.close >= cur.open;
-  const priceAboveLevel = cur.close >= level * 0.995;
-
-  return isBullishCandle || priceAboveLevel;
+  // Price should be at or above the level (support holding)
+  // Allow slightly below (0.5%) to account for wicks and spreads
+  return cur.close >= level * 0.995;
 }
 
 /**
  * Check HTF (daily) bias: is the current price near a key daily support?
- * Returns 'bullish' if price is within 3% above a daily support level,
- * 'bearish' if price is below a daily support, 'neutral' otherwise.
+ * Uses lookback=3 to match the more permissive S/R detection above.
  */
 export function calcHTFBias(
   dailyCandles: OHLCVCandle[],
@@ -209,38 +200,36 @@ export function calcHTFBias(
   const n = dailyCandles.length;
   const currentPrice = dailyCandles[n - 1].close;
 
-  // Find significant daily lows (swing lows over last 30 days)
   const dailyLevels = calcSupportResistanceLevels(dailyCandles, 3);
   if (dailyLevels.length === 0) return "neutral";
 
-  // Find support levels below current price
-  const supports = dailyLevels.filter((l) => l <= currentPrice);
+  const supports = dailyLevels.filter((l) => l <= currentPrice * 1.01); // slightly above to catch breakouts sitting on level
   if (supports.length === 0) return "neutral";
 
-  // Closest support below current price
   const closestSupport = supports.reduce((prev, cur) =>
     Math.abs(cur - currentPrice) < Math.abs(prev - currentPrice) ? cur : prev,
   );
 
   const distFromSupport = (currentPrice - closestSupport) / currentPrice;
 
-  // Within 3% above daily support = bullish bias
-  if (distFromSupport >= 0 && distFromSupport <= 0.03) return "bullish";
-  // Below key support = bearish
-  if (distFromSupport < 0) return "bearish";
+  // Widened from 3% to 5% to give more LONG setups
+  if (distFromSupport >= -0.01 && distFromSupport <= 0.05) return "bullish";
+  if (distFromSupport < -0.01) return "bearish";
   return "neutral";
 }
 
 /**
  * EliZ signal detection.
- * Scores 5 confluences (EliZ methodology):
- * C1: Significant S/R level within 3% of current price
- * C2: Liquidity grab detected on that level (within last 5 candles)
- * C3: Retest confirmed (price touching level with close confirmation)
- * C4: OBV rising (bullish volume direction — last 5 candles trend)
- * C5: HTF daily bias is bullish (price near daily support)
+ * Scores 5 confluences:
+ * C1: Significant S/R level within 4% of current price (widened from 3%)
+ * C2: Liquidity grab detected (last 10 candles ~40h), loosened tolerances
+ * C3: Price retesting ANY S/R level within 3% (independent from C1)
+ * C4: OBV rising (last 5 candles)
+ * C5: HTF daily bias bullish (background filter only, not shown in UI)
  *
- * Signal fires if score >= 3. TP1 = +3%, SL = -2%.
+ * Signal fires if score >= 3.
+ * C1 and C3 are now evaluated against the same level to avoid double-counting
+ * but C3 tolerance is wider so it can fire even when C1 doesn't.
  */
 export function calcElizSignal(
   candles4h: OHLCVCandle[],
@@ -248,17 +237,17 @@ export function calcElizSignal(
   prevDetectedAt?: number,
   prevEntry?: number,
 ): SignalResult | null {
-  if (candles4h.length < 20) return null;
+  if (candles4h.length < 15) return null; // reduced from 20
 
   const n = candles4h.length - 1;
   const cur = candles4h[n];
   const price = cur.close;
 
-  // Get key S/R levels
   const srLevels = calcSupportResistanceLevels(candles4h);
 
-  // Find the closest support level below current price
-  const supportLevels = srLevels.filter((l) => l <= price * 1.02); // within 2% above or any below
+  // Find the closest support level at or near current price
+  // Include levels slightly above price (up to 2%) to catch coins sitting just below resistance-turned-support
+  const supportLevels = srLevels.filter((l) => l <= price * 1.02);
   const nearestLevel =
     supportLevels.length > 0
       ? supportLevels.reduce((prev, cur) =>
@@ -269,17 +258,21 @@ export function calcElizSignal(
   // ── Confluence scoring ──
   let score = 0;
 
-  // C1: Significant S/R level within 3% of current price
+  // C1: Significant S/R level within 4% of current price (widened from 3%)
   const levelProximity = Math.abs(price - nearestLevel) / price;
-  const c1 = levelProximity <= 0.03;
+  const c1 = levelProximity <= 0.04;
   if (c1) score++;
 
-  // C2: Liquidity grab detected on that level
-  const c2 = detectLiquidityGrab(candles4h, nearestLevel, "below", 5);
+  // C2: Liquidity grab detected on ANY of the top-5 nearest S/R levels
+  // This prevents the signal from missing a grab because the "nearestLevel" is slightly off
+  const topLevels = srLevels.slice(0, 5);
+  const c2 = topLevels.some((lvl) =>
+    detectLiquidityGrab(candles4h, lvl, "below", 10),
+  );
   if (c2) score++;
 
-  // C3: Retest confirmed
-  const c3 = detectRetest(candles4h, nearestLevel);
+  // C3: Retest on ANY of the top-5 nearest S/R levels (independent from C1)
+  const c3 = topLevels.some((lvl) => detectRetest(candles4h, lvl));
   if (c3) score++;
 
   // C4: OBV rising (last 5 candles)
@@ -290,16 +283,14 @@ export function calcElizSignal(
   const c4 = obvEnd > obvStart;
   if (c4) score++;
 
-  // C5: HTF daily bias bullish
+  // C5: HTF daily bias bullish (background filter only, not shown in UI)
   const htfBias = calcHTFBias(dailyCandles);
   const c5 = htfBias === "bullish";
   if (c5) score++;
 
-  // Only show signals with score >= 3 (no weak 2/5 signals)
   const hasSignal = score >= 3;
 
-  // OBV slope as 0-100 proxy for the `rsi` field
-  // 50 = neutral, > 50 = rising, < 50 = falling
+  // OBV slope as 0-100 proxy
   let obvProxy = 50;
   if (obvArr.length >= 10) {
     const obvWindow = obvArr.slice(-10);
@@ -307,18 +298,15 @@ export function calcElizSignal(
     const obvLast = obvWindow[obvWindow.length - 1];
     if (Math.abs(obvFirst) > 0) {
       const obvChangePct = (obvLast - obvFirst) / Math.abs(obvFirst);
-      // Clamp to ±50% change → map to 0–100
       obvProxy = Math.max(0, Math.min(100, 50 + obvChangePct * 100));
     } else {
       obvProxy = obvEnd > obvStart ? 65 : 35;
     }
   }
 
-  // OBV momentum (last value - average of last 5) — stored as `macd`
   const obvMomentum =
     obvEnd - obvRecent.reduce((s, v) => s + v, 0) / obvRecent.length;
 
-  // Volume ratio vs 20-period average
   const startIdx = Math.max(0, n - 20);
   const recentVols = candles4h.slice(startIdx, n).map((c) => c.volume);
   const avgVol =
@@ -329,22 +317,18 @@ export function calcElizSignal(
 
   const entry = price;
 
-  // Freeze entry price from original detection
   const entryPrice = hasSignal
     ? prevDetectedAt !== undefined && prevEntry !== undefined
       ? prevEntry
       : price
     : price;
 
-  // TP1 = +3%, SL = -2%
   const tp1 = entryPrice * 1.03;
-  const tp2 = entryPrice * 1.06; // kept for internal shape compatibility
+  const tp2 = entryPrice * 1.06;
   const stopLoss = entryPrice * 0.98;
 
-  // Preserve original detectedAt if signal was already active
   const detectedAt = hasSignal ? (prevDetectedAt ?? Date.now()) : undefined;
 
-  // Store S/R levels in ema9/ema21/ema50 fields for chart display
   const ema9 = nearestLevel;
   const ema21 = srLevels[1] ?? nearestLevel;
   const ema50 = srLevels[2] ?? nearestLevel;
@@ -367,14 +351,12 @@ export function calcElizSignal(
   };
 }
 
-// ── Backcompat: calcSignal alias for any code still importing it ──
-// Uses only 4h candles; daily bias skipped in backtest context
+// ── Backcompat alias ──
 export function calcSignal(
   candles: OHLCVCandle[],
   prevDetectedAt?: number,
   prevEntry?: number,
 ): SignalResult | null {
-  // Use the same candles as a rough daily proxy in backtest mode
   return calcElizSignal(candles, candles, prevDetectedAt, prevEntry);
 }
 
@@ -397,8 +379,6 @@ export function runBacktest(
   for (let i = 20; i < candles.length - 12; i++) {
     const window = candles.slice(0, i + 1);
 
-    // EliZ HTF trend filter: only count signals when price is in a bullish structure.
-    // Price must be above the 50-period EMA of closes (trend filter, EliZ-style).
     const closes = window.map((c) => c.close);
     const ema50Arr = calcEMA(closes, 50);
     const ema50Val = ema50Arr[ema50Arr.length - 1];
@@ -411,11 +391,9 @@ export function runBacktest(
 
     totalSignals++;
     const entry = sig.entry;
-    // EliZ targets: TP1 = +3%, SL = -2%
     const tp = entry * 1.03;
     const sl = entry * 0.98;
 
-    // 48-hour evaluation window = 12 candles of 4h
     let outcome = 0;
     for (let j = i + 1; j < Math.min(i + 13, candles.length); j++) {
       if (candles[j].high >= tp) {

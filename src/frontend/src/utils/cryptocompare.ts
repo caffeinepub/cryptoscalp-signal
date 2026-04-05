@@ -1,5 +1,7 @@
 // CryptoCompare REST API utilities — replaces Binance
 // No API key required for public endpoints. No geo-restrictions.
+// Prices/24h% use CoinCap API (no rate limits, no geo-blocks).
+// OHLCV and live prices use CryptoCompare.
 
 export interface CoinListEntry {
   id: string;
@@ -494,72 +496,56 @@ export function getCCSymbol(coinId: string): string | null {
 }
 
 const CC_BASE = "https://min-api.cryptocompare.com/data";
+const COINCAP_BASE = "https://api.coincap.io/v2";
 
-// ── Helper: fetch with retry + exponential backoff ──
-async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response> {
-  let lastError: Error = new Error("Unknown error");
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return res;
-      lastError = new Error(`HTTP ${res.status}`);
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-    }
-    if (attempt < maxRetries - 1) {
-      await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
-    }
-  }
-  throw lastError;
-}
-
-// ── Fetch current prices for all coins in sequential batches ──
-// CryptoCompare URL limit: batch 30 symbols at a time, sequential with delay.
+// ── Fetch current prices for ALL coins using CoinCap API ──
+// CoinCap has no rate limits on public endpoints and no geo-restrictions.
+// Keyed by CoinCap id (same as our COIN_LIST id field).
 export async function fetchCoinList(): Promise<CoinListItem[]> {
   const coins = COIN_LIST.filter((c) => !isStablecoin(c.id, c.symbol));
-  const BATCH_SIZE = 30;
-  const priceMap = new Map<string, { price: number; change24h: number }>();
+  const coinIds = coins.map((c) => c.id).join(",");
+  const url = `${COINCAP_BASE}/assets?ids=${coinIds}&limit=200`;
 
-  for (let i = 0; i < coins.length; i += BATCH_SIZE) {
-    const batch = coins.slice(i, i + BATCH_SIZE);
-    const fsyms = batch.map((c) => c.ccSymbol).join(",");
-    const url = `${CC_BASE}/pricemultifull?fsyms=${fsyms}&tsyms=USD`;
+  interface CoinCapAsset {
+    id: string;
+    symbol: string;
+    priceUsd: string;
+    changePercent24Hr: string;
+  }
 
+  let dataMap = new Map<string, CoinCapAsset>();
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const res = await fetchWithRetry(url, 3);
-      const json = (await res.json()) as {
-        RAW?: Record<
-          string,
-          { USD?: { PRICE: number; CHANGEPCT24HOUR: number } }
-        >;
-      };
-      for (const coin of batch) {
-        const raw = json.RAW?.[coin.ccSymbol]?.USD;
-        if (raw) {
-          priceMap.set(coin.ccSymbol, {
-            price: raw.PRICE,
-            change24h: raw.CHANGEPCT24HOUR,
-          });
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`CoinCap HTTP ${res.status}`);
+      const json = (await res.json()) as { data?: CoinCapAsset[] };
+      const assets = json.data ?? [];
+      if (assets.length > 0) {
+        for (const asset of assets) {
+          dataMap.set(asset.id, asset);
         }
+        break; // success
       }
+      throw new Error("Empty CoinCap response");
     } catch {
-      // Batch failed — symbols will have zero values
-    }
-
-    // Small delay between batches to avoid rate limiting
-    if (i + BATCH_SIZE < coins.length) {
-      await new Promise((r) => setTimeout(r, 300));
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 600 * attempt));
+      }
+      // On final failure, dataMap stays empty → prices default to 0
     }
   }
 
   return coins.map((coin) => {
-    const data = priceMap.get(coin.ccSymbol);
+    const asset = dataMap.get(coin.id);
     return {
       id: coin.id,
       symbol: coin.symbol,
       name: coin.name,
-      currentPrice: data?.price ?? 0,
-      priceChange24h: data?.change24h ?? 0,
+      currentPrice: asset ? Number.parseFloat(asset.priceUsd) || 0 : 0,
+      priceChange24h: asset
+        ? Number.parseFloat(asset.changePercent24Hr) || 0
+        : 0,
       marketCapRank: coin.rank,
     } as CoinListItem;
   });
