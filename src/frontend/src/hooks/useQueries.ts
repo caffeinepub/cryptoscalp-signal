@@ -123,7 +123,7 @@ export function useCoinSignal(coinId: string | null) {
 
 // ── Batch signals for the whole coin list ──
 // Processes coins in chunks of 15 with 200ms delays between chunks.
-// Uses only 60 candles per coin (10 days of 4h data) for fast signal scanning.
+// Uses 120 candles per coin (20 days of 4h data) — more history = better S/R detection.
 // Daily bias is derived from the last 6 x 4h candles as a proxy.
 export function useAllSignals(coinIds: string[]) {
   // Tracks the first detectedAt + frozen entryPrice for each coinId with an active signal
@@ -149,9 +149,9 @@ export function useAllSignals(coinIds: string[]) {
         await Promise.all(
           chunk.map(async (id) => {
             try {
-              // Fetch only 60 candles (10 days of 4h) — sufficient for signal detection
-              // and ~9x less data than the previous 540-candle fetch.
-              const candles4h = await fetchOHLCWithVolume(id, 30, 60);
+              // Fetch 120 candles (20 days of 4h) — needed for reliable S/R level detection
+              // Good balance between speed and signal quality.
+              const candles4h = await fetchOHLCWithVolume(id, 30, 120);
 
               if (candles4h.length < 15) return; // not enough data, skip
 
