@@ -513,43 +513,56 @@ async function fetchWithRetry(url: string, maxRetries = 3): Promise<Response> {
   throw lastError;
 }
 
-// ── Fetch current prices for all coins in a single API call ──
-// Uses one request to avoid rate limiting from parallel batch requests.
+// ── Fetch current prices for all coins in sequential batches ──
+// CryptoCompare URL limit: batch 30 symbols at a time, sequential with delay.
 export async function fetchCoinList(): Promise<CoinListItem[]> {
   const coins = COIN_LIST.filter((c) => !isStablecoin(c.id, c.symbol));
-  const fsyms = coins.map((c) => c.ccSymbol).join(",");
-  const url = `${CC_BASE}/pricemultifull?fsyms=${fsyms}&tsyms=USD`;
+  const BATCH_SIZE = 30;
+  const priceMap = new Map<string, { price: number; change24h: number }>();
 
-  try {
-    const res = await fetchWithRetry(url, 3);
-    const json = (await res.json()) as {
-      RAW?: Record<
-        string,
-        { USD?: { PRICE: number; CHANGEPCT24HOUR: number } }
-      >;
-    };
-    return coins.map((coin) => {
-      const raw = json.RAW?.[coin.ccSymbol]?.USD;
-      return {
-        id: coin.id,
-        symbol: coin.symbol,
-        name: coin.name,
-        currentPrice: raw?.PRICE ?? 0,
-        priceChange24h: raw?.CHANGEPCT24HOUR ?? 0,
-        marketCapRank: coin.rank,
-      } as CoinListItem;
-    });
-  } catch {
-    // All retries failed — return zeros for all coins
-    return coins.map((coin) => ({
+  for (let i = 0; i < coins.length; i += BATCH_SIZE) {
+    const batch = coins.slice(i, i + BATCH_SIZE);
+    const fsyms = batch.map((c) => c.ccSymbol).join(",");
+    const url = `${CC_BASE}/pricemultifull?fsyms=${fsyms}&tsyms=USD`;
+
+    try {
+      const res = await fetchWithRetry(url, 3);
+      const json = (await res.json()) as {
+        RAW?: Record<
+          string,
+          { USD?: { PRICE: number; CHANGEPCT24HOUR: number } }
+        >;
+      };
+      for (const coin of batch) {
+        const raw = json.RAW?.[coin.ccSymbol]?.USD;
+        if (raw) {
+          priceMap.set(coin.ccSymbol, {
+            price: raw.PRICE,
+            change24h: raw.CHANGEPCT24HOUR,
+          });
+        }
+      }
+    } catch {
+      // Batch failed — symbols will have zero values
+    }
+
+    // Small delay between batches to avoid rate limiting
+    if (i + BATCH_SIZE < coins.length) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  return coins.map((coin) => {
+    const data = priceMap.get(coin.ccSymbol);
+    return {
       id: coin.id,
       symbol: coin.symbol,
       name: coin.name,
-      currentPrice: 0,
-      priceChange24h: 0,
+      currentPrice: data?.price ?? 0,
+      priceChange24h: data?.change24h ?? 0,
       marketCapRank: coin.rank,
-    })) as CoinListItem[];
-  }
+    } as CoinListItem;
+  });
 }
 
 // ── Fetch 4h OHLCV candles (90 days = 540 candles at 4h) ──
