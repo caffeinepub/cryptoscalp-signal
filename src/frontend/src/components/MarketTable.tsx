@@ -18,7 +18,7 @@ interface MarketTableProps {
   livePriceMap?: Map<string, number>;
 }
 
-type SortKey = "rank" | "price" | "change" | "rsi" | "winrate";
+type SortKey = "rank" | "price" | "change" | "winrate";
 
 export function MarketTable({
   coins,
@@ -55,10 +55,6 @@ export function MarketTable({
       } else if (sortKey === "change") {
         va = a.priceChange24h;
         vb = b.priceChange24h;
-      } else if (sortKey === "rsi") {
-        // rsi field now holds OBV proxy value (0-100)
-        va = a.signal?.rsi ?? 999;
-        vb = b.signal?.rsi ?? 999;
       } else if (sortKey === "winrate") {
         va = backtestMap?.get(a.id) ?? -1;
         vb = backtestMap?.get(b.id) ?? -1;
@@ -71,7 +67,7 @@ export function MarketTable({
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     } else {
       setSortKey(key);
-      setSortDir("desc"); // default descending for win rate makes more sense
+      setSortDir("desc");
     }
   }
 
@@ -176,18 +172,6 @@ export function MarketTable({
                 <th className="text-right px-3 py-2.5 text-xs font-medium text-red-400/70">
                   SL
                 </th>
-                <th
-                  className="text-right px-3 py-2.5 text-xs font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none hidden md:table-cell"
-                  onClick={() => toggleSort("rsi")}
-                  onKeyDown={(e) => e.key === "Enter" && toggleSort("rsi")}
-                >
-                  <div className="flex items-center justify-end gap-1">
-                    OBV <SortIcon col="rsi" />
-                  </div>
-                </th>
-                <th className="text-right px-3 py-2.5 text-xs font-medium text-muted-foreground hidden md:table-cell">
-                  Grab
-                </th>
                 <th className="text-right px-3 py-2.5 text-xs font-medium text-muted-foreground">
                   Grafico
                 </th>
@@ -200,7 +184,7 @@ export function MarketTable({
                 <AnimatePresence mode="popLayout">
                   {filtered.length === 0 ? (
                     <tr data-ocid="market.empty_state">
-                      <td colSpan={13} className="py-16 text-center">
+                      <td colSpan={11} className="py-16 text-center">
                         <div className="flex flex-col items-center gap-2 text-muted-foreground">
                           <BarChart2 className="w-8 h-8 opacity-30" />
                           <p className="text-sm">
@@ -240,7 +224,7 @@ export function MarketTable({
 }
 
 function SkeletonRows() {
-  const COLS = 12;
+  const COLS = 10;
   const ROWS = [
     "sk1",
     "sk2",
@@ -253,20 +237,7 @@ function SkeletonRows() {
     "sk9",
     "sk10",
   ];
-  const CELLS = [
-    "c1",
-    "c2",
-    "c3",
-    "c4",
-    "c5",
-    "c6",
-    "c7",
-    "c8",
-    "c9",
-    "c10",
-    "c11",
-    "c12",
-  ];
+  const CELLS = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10"];
   return (
     <>
       {ROWS.map((rk) => (
@@ -323,8 +294,10 @@ function ScoreBadge({ score }: { score: number }) {
     score >= 5
       ? "text-signal-green bg-signal-green/10 border-signal-green/30"
       : score >= 4
-        ? "text-orange-400 bg-orange-400/10 border-orange-400/30"
-        : "text-yellow-400 bg-yellow-400/10 border-yellow-400/30";
+        ? "text-emerald-400 bg-emerald-400/10 border-emerald-400/25"
+        : score >= 3
+          ? "text-orange-400 bg-orange-400/10 border-orange-400/30"
+          : "text-yellow-400 bg-yellow-400/10 border-yellow-400/30";
 
   return (
     <span
@@ -364,6 +337,7 @@ function CoinRow({
   livePrice?: number;
 }) {
   const hasSignal = coin.signal?.hasSignal;
+  const score = coin.signal?.score ?? 0;
 
   // Refresh signal age display every 60 seconds
   const [, setTick] = useState(0);
@@ -377,20 +351,36 @@ function CoinRow({
   const displayPrice = livePrice ?? coin.currentPrice;
   const isLive = livePrice !== undefined;
 
-  // OBV indicator: rsi field is now OBV proxy (0-100)
-  // > 52 = rising (↑ green), < 48 = falling (↓ red), else neutral
-  const obvValue = coin.signal?.rsi ?? 50;
-  const obvDisplay =
-    obvValue > 52 ? (
-      <span className="text-signal-green font-mono text-xs">↑</span>
-    ) : obvValue < 48 ? (
-      <span className="text-signal-red font-mono text-xs">↓</span>
-    ) : (
-      <span className="text-muted-foreground/60 font-mono text-xs">—</span>
+  // Signal badge label + style based on score tier
+  function getSignalBadge() {
+    if (score >= 5) {
+      return (
+        <Badge className="bg-signal-green/15 text-signal-green border-signal-green/30 border signal-glow text-[10px] px-2 py-0.5 font-mono font-medium animate-pulse-signal">
+          🟢 STRONG
+        </Badge>
+      );
+    }
+    if (score >= 4) {
+      return (
+        <Badge className="bg-signal-green/10 text-signal-green border-signal-green/20 border text-[10px] px-2 py-0.5 font-mono font-medium animate-pulse-signal">
+          🟢 LONG
+        </Badge>
+      );
+    }
+    if (score >= 3) {
+      return (
+        <Badge className="bg-orange-400/15 text-orange-400 border-orange-400/30 border text-[10px] px-2 py-0.5 font-mono font-medium">
+          🟡 LONG
+        </Badge>
+      );
+    }
+    // score === 2
+    return (
+      <Badge className="bg-yellow-500/15 text-yellow-400 border-yellow-500/30 border text-[10px] px-2 py-0.5 font-mono font-medium">
+        ⚡ WEAK
+      </Badge>
     );
-
-  // Grab indicator: score >= 2 means liquidity grab detected
-  const grabDetected = (coin.signal?.score ?? 0) >= 2;
+  }
 
   return (
     <motion.tr
@@ -427,13 +417,13 @@ function CoinRow({
         </div>
       </td>
 
-      {/* Price -- live Binance if available, else CoinGecko */}
+      {/* Price -- live if available, else fetched */}
       <td className="px-3 py-2.5 text-right font-mono text-xs text-foreground">
         {isLive ? (
           <span className="flex items-center justify-end gap-1">
             <span
               className="w-1.5 h-1.5 rounded-full bg-signal-green animate-pulse shrink-0"
-              title="Live Binance"
+              title="Live"
             />
             {formatPrice(displayPrice)}
           </span>
@@ -457,15 +447,7 @@ function CoinRow({
       <td className="px-3 py-2.5 text-center">
         {hasSignal ? (
           <div className="flex flex-col items-center gap-0.5">
-            {(coin.signal?.score ?? 0) >= 3 ? (
-              <Badge className="bg-signal-green/15 text-signal-green border-signal-green/30 border signal-glow text-[10px] px-2 py-0.5 font-mono font-medium animate-pulse-signal">
-                🟢 LONG
-              </Badge>
-            ) : (
-              <Badge className="bg-yellow-500/15 text-yellow-400 border-yellow-500/30 border text-[10px] px-2 py-0.5 font-mono font-medium">
-                ⚡ WEAK
-              </Badge>
-            )}
+            {getSignalBadge()}
             {coin.signal?.detectedAt && (
               <span className="text-[9px] text-muted-foreground/60 font-mono">
                 {formatSignalAge(coin.signal.detectedAt)}
@@ -477,7 +459,7 @@ function CoinRow({
         )}
       </td>
 
-      {/* Confluenze EliZ (was: Signal Strength) */}
+      {/* Confluenze EliZ */}
       <td className="px-3 py-2.5 text-center">
         {hasSignal && coin.signal ? (
           <ScoreBadge score={coin.signal.score} />
@@ -540,28 +522,6 @@ function CoinRow({
               type="sl"
             />
           </span>
-        ) : (
-          <span className="text-muted-foreground/40">—</span>
-        )}
-      </td>
-
-      {/* OBV (was: RSI) — sortable, shows directional arrow */}
-      <td className="px-3 py-2.5 text-right hidden md:table-cell">
-        {coin.signal ? (
-          obvDisplay
-        ) : (
-          <span className="text-muted-foreground/40 text-xs font-mono">—</span>
-        )}
-      </td>
-
-      {/* Grab (was: Vol Ratio) — shows ✓ if score >= 2 */}
-      <td className="px-3 py-2.5 text-right font-mono text-xs hidden md:table-cell">
-        {coin.signal ? (
-          grabDetected ? (
-            <span className="text-signal-green">✓</span>
-          ) : (
-            <span className="text-muted-foreground/40">—</span>
-          )
         ) : (
           <span className="text-muted-foreground/40">—</span>
         )}

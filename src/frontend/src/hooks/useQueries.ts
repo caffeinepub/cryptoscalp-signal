@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import {
   fetchCoinList,
   fetchDailyOHLC,
@@ -36,6 +36,46 @@ export interface TopCoinsResult {
   isFromCache: boolean;
 }
 
+// ── Fetch OHLCV with retry logic ──
+async function fetchOHLCWithRetry(
+  coinId: string,
+  days: number,
+  maxRetries = 3,
+) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await fetchOHLCWithVolume(coinId, days);
+      if (result && result.length >= 15) return result;
+      // Got empty/insufficient data — wait before retry
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
+    } catch {
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
+    }
+  }
+  return [];
+}
+
+async function fetchDailyWithRetry(coinId: string, maxRetries = 2) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await fetchDailyOHLC(coinId);
+      if (result && result.length > 0) return result;
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
+    } catch {
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
+    }
+  }
+  return [];
+}
+
 // ── Top coins (market data only, no signals yet) ──
 export function useTopCoins() {
   return useQuery<TopCoinsResult>({
@@ -55,7 +95,7 @@ export function useCoinOHLCV(coinId: string | null) {
     queryKey: ["ohlcv", coinId],
     queryFn: async () => {
       if (!coinId) return [];
-      return fetchOHLCWithVolume(coinId, 30);
+      return fetchOHLCWithRetry(coinId, 30);
     },
     enabled: !!coinId,
     staleTime: 5 * 60 * 1000,
@@ -70,8 +110,8 @@ export function useCoinSignal(coinId: string | null) {
     queryFn: async () => {
       if (!coinId) return undefined;
       const [candles4h, dailyCandles] = await Promise.all([
-        fetchOHLCWithVolume(coinId, 30),
-        fetchDailyOHLC(coinId),
+        fetchOHLCWithRetry(coinId, 30),
+        fetchDailyWithRetry(coinId),
       ]);
       return calcElizSignal(candles4h, dailyCandles) ?? undefined;
     },
@@ -82,70 +122,81 @@ export function useCoinSignal(coinId: string | null) {
 }
 
 // ── Batch signals for the whole coin list ──
-// Fetches OHLCV + daily candles and computes EliZ signal for each coin concurrently.
-// Preserves detectedAt timestamps and frozen entryPrice across refreshes using a stable ref map.
+// Processes coins in small chunks (3) with generous 1.2s delays between chunks
+// to avoid overwhelming CryptoCompare's free-tier rate limits.
 export function useAllSignals(coinIds: string[]) {
   // Tracks the first detectedAt + frozen entryPrice for each coinId with an active signal
   const detectedAtMap = useRef<
     Map<string, { detectedAt: number; entryPrice: number }>
   >(new Map());
+  const progressRef = useRef(0);
+  const [progress, setProgress] = useState(0);
 
-  return useQueries({
-    queries: coinIds.map((id) => ({
-      queryKey: ["signal-batch", id],
-      queryFn: async (): Promise<{ id: string; signal: Signal | null }> => {
-        try {
-          // Fetch 4h candles and daily candles concurrently
-          const [candles4h, dailyCandles] = await Promise.all([
-            fetchOHLCWithVolume(id, 30),
-            fetchDailyOHLC(id),
-          ]);
+  const query = useQuery<Map<string, Signal>>({
+    queryKey: ["signal-batch-seq", coinIds.length],
+    queryFn: async () => {
+      const result = new Map<string, Signal>();
+      progressRef.current = 0;
+      setProgress(0);
 
-          // Pass previous detectedAt + entryPrice to preserve original signal detection data
-          const prevData = detectedAtMap.current.get(id);
-          const signal = calcElizSignal(
-            candles4h,
-            dailyCandles,
-            prevData?.detectedAt,
-            prevData?.entryPrice,
-          );
+      // Small chunk size + generous delay = reliable fetching
+      const CHUNK = 5;
+      const DELAY = 600; // 0.6 seconds between chunks
 
-          // Track first detection time and freeze entry price
-          if (signal?.hasSignal) {
-            if (!detectedAtMap.current.has(id)) {
-              detectedAtMap.current.set(id, {
-                detectedAt: signal.detectedAt ?? Date.now(),
-                entryPrice: signal.entryPrice,
-              });
+      for (let i = 0; i < coinIds.length; i += CHUNK) {
+        const chunk = coinIds.slice(i, i + CHUNK);
+        await Promise.all(
+          chunk.map(async (id) => {
+            try {
+              const [candles4h, dailyCandles] = await Promise.all([
+                fetchOHLCWithRetry(id, 30),
+                fetchDailyWithRetry(id),
+              ]);
+
+              if (candles4h.length < 15) return; // not enough data, skip
+
+              const prevData = detectedAtMap.current.get(id);
+              const signal = calcElizSignal(
+                candles4h,
+                dailyCandles,
+                prevData?.detectedAt,
+                prevData?.entryPrice,
+              );
+              if (signal?.hasSignal) {
+                if (!detectedAtMap.current.has(id)) {
+                  detectedAtMap.current.set(id, {
+                    detectedAt: signal.detectedAt ?? Date.now(),
+                    entryPrice: signal.entryPrice,
+                  });
+                }
+                result.set(id, signal);
+              } else {
+                detectedAtMap.current.delete(id);
+              }
+            } catch {
+              // skip failed coins silently
             }
-          } else {
-            // Signal gone, clear tracking
-            detectedAtMap.current.delete(id);
-          }
-
-          return { id, signal };
-        } catch {
-          return { id, signal: null };
-        }
-      },
-      staleTime: 5 * 60 * 1000,
-      retry: 1,
-    })),
-    combine: (results) => {
-      const map = new Map<string, Signal>();
-      for (const r of results) {
-        if (r.status === "success" && r.data?.signal) {
-          map.set(r.data.id, r.data.signal);
+          }),
+        );
+        progressRef.current = Math.min(i + CHUNK, coinIds.length);
+        setProgress(progressRef.current);
+        if (i + CHUNK < coinIds.length) {
+          await new Promise((r) => setTimeout(r, DELAY));
         }
       }
-      return {
-        data: map,
-        isLoading: results.some((r) => r.status === "pending"),
-        progress: results.filter((r) => r.status !== "pending").length,
-        total: results.length,
-      };
+      return result;
     },
+    staleTime: 5 * 60 * 1000,
+    retry: 0,
+    enabled: coinIds.length > 0,
   });
+
+  return {
+    data: query.data ?? new Map<string, Signal>(),
+    isLoading: query.isLoading || query.isFetching,
+    progress,
+    total: coinIds.length,
+  };
 }
 
 // ── Backtest for coins with active signals ──
@@ -154,7 +205,7 @@ export function useBacktestResults(coinIds: string[]) {
     queries: coinIds.map((id) => ({
       queryKey: ["backtest", id],
       queryFn: async (): Promise<BacktestResult> => {
-        const candles = await fetchOHLCWithVolume(id, 90);
+        const candles = await fetchOHLCWithRetry(id, 90);
         return runBacktest(id, candles);
       },
       enabled: coinIds.length > 0,

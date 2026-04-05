@@ -41,7 +41,6 @@ export default function App() {
   const coins = topCoinsResult?.coins ?? [];
   const isFromCache = topCoinsResult?.isFromCache ?? false;
 
-  // Use ALL coins for signals -- Binance has no rate limit
   const batchCoinIds = useMemo(() => coins.map((c) => c.id), [coins]);
 
   const {
@@ -78,14 +77,14 @@ export default function App() {
     [signalCoins],
   );
 
-  // Build symbolMap for Binance WebSocket (coinId → ticker symbol)
+  // Build symbolMap for live price hook (coinId → ticker symbol)
   const symbolMap = useMemo(() => {
     const m = new Map<string, string>();
     for (const c of coins) m.set(c.id, c.symbol);
     return m;
   }, [coins]);
 
-  // Live prices from Binance WebSocket (only for coins with active signals)
+  // Live prices (only for coins with active signals)
   const livePrices = useBinancePrices(signalCoinIds, symbolMap);
 
   // Run backtest for coins with active signals to display win rate in the dashboard
@@ -128,13 +127,13 @@ export default function App() {
     prevSignalIds.current = currentSignalIds;
   }, [coinsWithSignals, coinsLoading, sendNotification]);
 
-  // Countdown timer
+  // Countdown timer — invalidates both coin list and signal batch on expiry
   useEffect(() => {
     const interval = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
           queryClient.invalidateQueries({ queryKey: ["topCoins"] });
-          queryClient.invalidateQueries({ queryKey: ["signal-batch"] });
+          queryClient.invalidateQueries({ queryKey: ["signal-batch-seq"] });
           setLastUpdated(new Date());
           toast.success("Dati aggiornati automaticamente", { duration: 2000 });
           return REFRESH_INTERVAL;
@@ -153,7 +152,7 @@ export default function App() {
 
   const handleRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["topCoins"] });
-    queryClient.invalidateQueries({ queryKey: ["signal-batch"] });
+    queryClient.invalidateQueries({ queryKey: ["signal-batch-seq"] });
     setCountdown(REFRESH_INTERVAL);
     setLastUpdated(new Date());
     toast.success("Aggiornamento avviato...", { duration: 1500 });
