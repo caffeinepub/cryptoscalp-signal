@@ -1,12 +1,15 @@
-// useBinancePrices — now polls CryptoCompare for live prices
-// Binance WebSocket was replaced due to geo-restrictions on hosting infrastructure.
+// useBinancePrices — polls CoinGecko for live prices of active coins.
+// Uses the same data source as the rest of the app (no COIN_LIST dependency).
+// Compatible with the dynamic top-25 coin universe from CoinGecko.
 import { useEffect, useRef, useState } from "react";
-import { COIN_LIST, fetchLivePrice } from "../utils/cryptocompare";
+
+const CG_BASE = "https://api.coingecko.com/api/v3";
+const POLL_INTERVAL_MS = 30_000; // 30 seconds
 
 /**
- * Polls CryptoCompare for live prices of active signal coins.
- * Returns a map of coinId → live price, updated every 15 seconds.
- * Silent on errors — callers fall back to last known price.
+ * Polls CoinGecko for live prices of all provided coinIds.
+ * Returns a Map<coinId, livePrice>, updated every 30 seconds.
+ * Falls back silently on errors — callers use last known price.
  */
 export function useBinancePrices(
   coinIds: string[],
@@ -14,7 +17,7 @@ export function useBinancePrices(
 ): Map<string, number> {
   const [prices, setPrices] = useState<Map<string, number>>(new Map());
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const coinIdsKey = coinIds.slice().sort().join(",");
+  const coinIdsKey = [...coinIds].sort().join(",");
 
   useEffect(() => {
     if (intervalRef.current) {
@@ -28,29 +31,32 @@ export function useBinancePrices(
       return;
     }
 
-    // Verify all ids exist in COIN_LIST
-    const validIds = ids.filter((id) => COIN_LIST.some((c) => c.id === id));
-    if (validIds.length === 0) return;
-
     async function pollPrices() {
-      const entries = await Promise.all(
-        validIds.map(async (id) => {
-          const price = await fetchLivePrice(id);
-          return price !== null ? ([id, price] as [string, number]) : null;
-        }),
-      );
-      const next = new Map<string, number>();
-      for (const entry of entries) {
-        if (entry) next.set(entry[0], entry[1]);
+      try {
+        const idsParam = ids.join(",");
+        const url = `${CG_BASE}/simple/price?ids=${idsParam}&vs_currencies=usd`;
+        const res = await fetch(url);
+        if (!res.ok) return; // silent — keep last known prices
+
+        const data: Record<string, { usd: number }> = await res.json();
+        const next = new Map<string, number>();
+        for (const id of ids) {
+          const price = data[id]?.usd;
+          if (price !== undefined && price > 0) {
+            next.set(id, price);
+          }
+        }
+        if (next.size > 0) setPrices(next);
+      } catch {
+        // silent — keep last known prices
       }
-      if (next.size > 0) setPrices(next);
     }
 
-    // Initial fetch
+    // Initial fetch immediately
     pollPrices();
 
-    // Poll every 15 seconds
-    intervalRef.current = setInterval(pollPrices, 15_000);
+    // Poll every 30 seconds
+    intervalRef.current = setInterval(pollPrices, POLL_INTERVAL_MS);
 
     return () => {
       if (intervalRef.current) {

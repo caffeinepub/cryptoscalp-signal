@@ -52,7 +52,22 @@ export default function App() {
 
   // We need live prices BEFORE useAllSignals so we can pass them in for SL/TP validation.
   // Use all coin IDs for live prices (not just signal coins) so we can validate all signals.
-  const livePrices = useBinancePrices(batchCoinIds, symbolMap);
+  const polledPrices = useBinancePrices(batchCoinIds, symbolMap);
+
+  // Merge polled prices with prices already known from CoinGecko coins list.
+  // This ensures signals are validated immediately (before the first 30s poll completes).
+  const livePrices = useMemo(() => {
+    const merged = new Map<string, number>();
+    // Seed with CoinGecko prices from the coin list (always available)
+    for (const coin of coins) {
+      if (coin.currentPrice > 0) merged.set(coin.id, coin.currentPrice);
+    }
+    // Override with polled live prices (more recent)
+    for (const [id, price] of polledPrices) {
+      if (price > 0) merged.set(id, price);
+    }
+    return merged;
+  }, [coins, polledPrices]);
 
   const {
     data: signalMap,
