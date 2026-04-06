@@ -4,6 +4,7 @@ const BASE = "https://api.coingecko.com/api/v3";
 const CACHE_KEY = "cryptoscalp_top_coins_cache";
 const VOLUME_CACHE_KEY = "cryptoscalp_top_volume_cache";
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour — matches refresh interval
+const MIN_VALID_COINS = 20; // cache is invalid if it has fewer than this
 
 export interface CoinListItem {
   id: string;
@@ -137,9 +138,9 @@ export function isStablecoin(id: string, symbol: string): boolean {
   if (STABLE_SYMBOLS.has(sym)) return true;
   if (sym.endsWith("usd") || sym.startsWith("usd")) return true;
   if (sym.endsWith("eur") && sym !== "eur") return true;
-  // Exclude wrapped tokens
+  // Exclude wrapped tokens (e.g. wbtc, weth) — but keep WOO, etc.
   if (sym.startsWith("w") && sym.length > 1 && !sym.startsWith("woo"))
-    return false; // keep WOO etc
+    return true; // BUG FIX: was `return false`, should be `return true`
   return false;
 }
 
@@ -164,24 +165,26 @@ function saveCache(key: string, data: CoinListItem[]): void {
   }
 }
 
-/** Returns cached volume coins if fresh (within 1 hour) */
+/** Returns cached volume coins if fresh (within 1 hour) AND has enough coins */
 export function getCachedVolumeCoins(): {
   data: CoinListItem[];
   isStale: boolean;
 } | null {
   const cache = loadCache(VOLUME_CACHE_KEY);
-  if (!cache || cache.data.length === 0) return null;
+  // Invalidate cache if it has fewer than MIN_VALID_COINS — it was likely
+  // saved from a partial/failed fetch.
+  if (!cache || cache.data.length < MIN_VALID_COINS) return null;
   const isStale = Date.now() - cache.fetchedAt > CACHE_TTL;
   return { data: cache.data, isStale };
 }
 
-/** Returns cached coins if they exist (regardless of age) */
+/** Returns cached coins if they exist and have enough entries */
 export function getCachedCoins(): {
   data: CoinListItem[];
   isStale: boolean;
 } | null {
   const cache = loadCache(CACHE_KEY);
-  if (!cache || cache.data.length === 0) return null;
+  if (!cache || cache.data.length < MIN_VALID_COINS) return null;
   const isStale = Date.now() - cache.fetchedAt > CACHE_TTL;
   return { data: cache.data, isStale };
 }
@@ -218,9 +221,10 @@ async function fetchWithRetry(
  * Fetch the top 25 non-stablecoin coins by 24h trading volume from CoinGecko.
  * Fetches a larger set (top 80 by volume) to ensure we get 25 after filtering.
  * Results are cached for 1 hour.
+ * Cache is ignored if it contains fewer than 20 coins (was saved from a bad fetch).
  */
 export async function fetchTopByVolume(limit = 25): Promise<CoinListItem[]> {
-  // Try cache first — only use if not stale (within 1 hour)
+  // Try cache first — only use if fresh AND has enough coins
   const cached = getCachedVolumeCoins();
   if (cached && !cached.isStale) {
     return cached.data.slice(0, limit);
@@ -230,7 +234,7 @@ export async function fetchTopByVolume(limit = 25): Promise<CoinListItem[]> {
   const url = `${BASE}/coins/markets?vs_currency=usd&order=volume_desc&per_page=80&page=1&sparkline=false&price_change_percentage=24h`;
   const res = await fetchWithRetry(url, 3, 2000);
   if (!res.ok) {
-    // On error, return stale cache if available
+    // On error, return stale cache if available and has enough coins
     if (cached) return cached.data.slice(0, limit);
     throw new Error(`CoinGecko error ${res.status}`);
   }
@@ -249,7 +253,10 @@ export async function fetchTopByVolume(limit = 25): Promise<CoinListItem[]> {
       volume24h: c.total_volume ?? 0,
     }));
 
-  saveCache(VOLUME_CACHE_KEY, coins);
+  // Only save to cache if we got a meaningful result
+  if (coins.length >= MIN_VALID_COINS) {
+    saveCache(VOLUME_CACHE_KEY, coins);
+  }
   return coins;
 }
 

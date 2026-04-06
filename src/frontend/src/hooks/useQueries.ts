@@ -40,12 +40,12 @@ export interface TopCoinsResult {
   isFromCache: boolean;
 }
 
-// ── Hour bucket — changes every hour, triggers refresh ——
+// ── Hour bucket — changes every hour, triggers refresh ──
 function hourBucket(): number {
   return Math.floor(Date.now() / (60 * 60 * 1000));
 }
 
-// ── Fetch OHLCV from CoinGecko with retry logic ——
+// ── Fetch OHLCV from CoinGecko with retry logic ──
 async function fetchOHLCWithRetry(
   coinId: string,
   days: number,
@@ -138,8 +138,10 @@ export function useCoinSignal(coinId: string | null) {
 // Signals are PERSISTED in localStorage for up to 24 hours.
 // A signal remains visible until:
 //   - 24h have passed since detection
-//   - The live price touches TP1 (+3%) or SL (-2%)
+//   - The live price touches TP1 (+2%) or SL (-2%)
 //
+// The queryKey includes both the coin list AND the hourBucket so a new
+// analysis cycle starts whenever the coin list changes OR an hour passes.
 export function useAllSignals(
   coinIds: string[],
   livePrices?: Map<string, number>,
@@ -160,7 +162,9 @@ export function useAllSignals(
   }
 
   const query = useQuery<Map<string, Signal>>({
-    queryKey: ["signal-batch-cg", coinIds.join(",")],
+    // Include both coinIds AND hourBucket in the key so the query re-runs
+    // whenever the coin list changes (new hour, manual refresh, etc.)
+    queryKey: ["signal-batch-cg", coinIds.join(","), hourBucket()],
     queryFn: async () => {
       const freshMap = new Map<string, Signal>();
       progressRef.current = 0;

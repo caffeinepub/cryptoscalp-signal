@@ -84,7 +84,7 @@ export default function App() {
     selectedCoin?.id ?? null,
   );
 
-  // Merge coins + signals
+  // Merge coins + signals — ALL coins are included, signal is undefined for those without one
   const coinsWithSignals = useMemo<CoinWithSignal[]>(() => {
     return coins.map((coin) => ({
       ...coin,
@@ -144,12 +144,13 @@ export default function App() {
   }, [coinsWithSignals, coinsLoading, sendNotification]);
 
   // Countdown timer — invalidates both coin list and signal batch on expiry
+  // Uses the correct queryKey prefix "signal-batch-cg" (not the old "signal-batch-seq")
   useEffect(() => {
     const interval = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
           queryClient.invalidateQueries({ queryKey: ["topCoins"] });
-          queryClient.invalidateQueries({ queryKey: ["signal-batch-seq"] });
+          queryClient.invalidateQueries({ queryKey: ["signal-batch-cg"] });
           setLastUpdated(new Date());
           toast.success("Dati aggiornati automaticamente", { duration: 2000 });
           return REFRESH_INTERVAL;
@@ -168,7 +169,7 @@ export default function App() {
 
   const handleRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["topCoins"] });
-    queryClient.invalidateQueries({ queryKey: ["signal-batch-seq"] });
+    queryClient.invalidateQueries({ queryKey: ["signal-batch-cg"] });
     setCountdown(REFRESH_INTERVAL);
     setLastUpdated(new Date());
     toast.success("Aggiornamento avviato...", { duration: 1500 });
