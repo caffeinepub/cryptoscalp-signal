@@ -27,6 +27,10 @@ export interface SignalResult {
   detectedAt?: number;
 }
 
+// ── TP/SL constants ──
+export const TP1_PCT = 0.02; // +2% target
+export const SL_PCT = 0.02; // -2% stop loss
+
 // ── Classic helpers (still used for backtest) ──
 
 export function calcEMA(closes: number[], period: number): number[] {
@@ -235,7 +239,7 @@ export function calcHTFBias(
  * BONUS: Price within 1.5% of any S/R ("on the level")
  * HTF BONUS: daily bias bullish (if daily candles provided)
  *
- * Signal fires at score >= 3.
+ * Signal fires at score >= 3 (live dashboard).
  */
 export function calcElizSignal(
   candles4hRaw: OHLCVCandle[],
@@ -330,6 +334,7 @@ export function calcElizSignal(
     if (htfBias === "bullish") score++;
   }
 
+  // Live dashboard: show signals from score >= 3
   const hasSignal = score >= 3;
 
   // ── Diagnostic log ──
@@ -371,9 +376,10 @@ export function calcElizSignal(
       : price
     : price;
 
-  const tp1 = entryPrice * 1.03;
-  const tp2 = entryPrice * 1.06;
-  const stopLoss = entryPrice * 0.98;
+  // TP1 = +2%, SL = -2%
+  const tp1 = entryPrice * (1 + TP1_PCT);
+  const tp2 = entryPrice * 1.04; // tp2 kept for display reference
+  const stopLoss = entryPrice * (1 - SL_PCT);
 
   const detectedAt = hasSignal ? (prevDetectedAt ?? Date.now()) : undefined;
 
@@ -412,6 +418,13 @@ export interface BacktestResult {
   averageReturn: number;
 }
 
+/**
+ * Backtest with stricter EliZ filters to improve win rate:
+ * - Only signals with score >= 4/5 (higher quality)
+ * - HTF Bias Daily must be bullish (required, not just bonus)
+ * - 72h evaluation window (18x 4h candles) to give more time to reach TP
+ * - TP1 = +2%, SL = -2%
+ */
 export function runBacktest(
   id: string,
   candles: OHLCVCandle[],
@@ -422,26 +435,47 @@ export function runBacktest(
 
   const cleanedCandles = cleanCandles(candles);
 
-  for (let i = 20; i < cleanedCandles.length - 12; i++) {
+  // Minimum score required for backtest signals (more selective than live)
+  const BACKTEST_MIN_SCORE = 4;
+  // Evaluation window: 72h = 18 x 4h candles
+  const EVAL_CANDLES = 18;
+
+  for (let i = 20; i < cleanedCandles.length - EVAL_CANDLES; i++) {
     const window = cleanedCandles.slice(0, i + 1);
 
+    // ── Require bullish HTF Bias (daily EMA20 proxy) ──
+    // Use EMA20 on 4h closes as a quick daily bias proxy:
+    // price must be above EMA20 to confirm bullish structure.
     const closes = window.map((c) => c.close);
+    const ema20Arr = calcEMA(closes, Math.min(20, closes.length));
+    const ema20Val = ema20Arr[ema20Arr.length - 1];
+    const currentClose = closes[closes.length - 1];
+    const htfBullish = currentClose > ema20Val;
+    if (!htfBullish) continue;
+
+    // ── Also require EMA50 bullish trend ──
     const ema50Arr = calcEMA(closes, Math.min(50, closes.length));
     const ema50Val = ema50Arr[ema50Arr.length - 1];
-    const currentClose = closes[closes.length - 1];
     const inBullishTrend = currentClose > ema50Val;
     if (!inBullishTrend) continue;
 
     const sig = calcElizSignal(window, []);
     if (!sig?.hasSignal) continue;
 
+    // ── Backtest requires minimum score of 4/5 ──
+    if (sig.score < BACKTEST_MIN_SCORE) continue;
+
     totalSignals++;
     const entry = sig.entry;
-    const tp = entry * 1.03;
-    const sl = entry * 0.98;
+    const tp = entry * (1 + TP1_PCT); // +2%
+    const sl = entry * (1 - SL_PCT); // -2%
 
     let outcome = 0;
-    for (let j = i + 1; j < Math.min(i + 13, cleanedCandles.length); j++) {
+    for (
+      let j = i + 1;
+      j < Math.min(i + EVAL_CANDLES + 1, cleanedCandles.length);
+      j++
+    ) {
       if (cleanedCandles[j].high >= tp) {
         outcome = (tp - entry) / entry;
         break;

@@ -1,33 +1,33 @@
 # CryptoScalp Signal
 
 ## Current State
-EliZ-methodology signal engine using 5 confluences (C1-C5) + bonus.
-C2 (liquidity grab) is currently treated as a hard blocker in practice because
-the other conditions rarely stack to 3 without it, especially in bear/ranging markets.
-Result: zero signals across all 109 coins.
+Full EliZ-style crypto scalping dashboard using CoinGecko as exclusive data source.
+- Top 25 coins by 24h volume (dynamic, refreshed hourly)
+- Signal logic: 5 independent confluences (C1-C5) + bonus scoring
+- Signals persist up to 24h or until TP1/SL is hit
+- Backtest: 48h window, signals >= 3/5, EMA50 trend filter
+- TP1: +3%, SL: -2%
+- Dashboard live signals: score >= 3
 
 ## Requested Changes (Diff)
 
 ### Add
-- Nothing new.
+- Export constants TP1_PCT and SL_PCT in indicators.ts for single-source-of-truth
 
 ### Modify
-- `calcElizSignal` in `indicators.ts`:
-  - Decouple C2 from being a de-facto requirement. Any 3 of the 6 scored items
-    (C1, C2, C3, C4, C5, bonus) triggers the signal.
-  - Widen C1 support proximity: 8% → 12% (keeps C1 and C3 clearly different)
-  - Widen C3 retest tolerance: 12% → 18% (any S/R level)
-  - Extend C2 grab lookback: 20 candles → 30 candles (~5 days of 4h)
-  - No change to score threshold (still >= 3)
+- **TP1**: from +3% to **+2%** (both live signals and backtest)
+- **Backtest minimum score**: from 3/5 to **4/5** (more selective, better quality)
+- **Backtest evaluation window**: from 48h (12 candles) to **72h (18 candles)** (more time to reach TP)
+- **Backtest HTF Bias filter**: now **mandatory** (price must be above EMA20 AND EMA50) instead of just a bonus
+- **usePersistedSignals**: storage key bumped to v3 to clear old signals with +3% TP1
+- **Dashboard live signals**: unchanged, still shows score >= 3
 
 ### Remove
-- Nothing.
+- Nothing removed
 
 ## Implementation Plan
-1. Edit `src/frontend/src/utils/indicators.ts`:
-   - C1: proximity threshold 0.08 → 0.12
-   - C3: `detectRetest` tolerance 0.12 → 0.18
-   - C2: grab lookback 20 → 30 candles
-   - Keep score >= 3 as minimum signal threshold
-   - No other logic changes
-2. Validate and deploy.
+1. Add TP1_PCT=0.02 and SL_PCT=0.02 constants to indicators.ts
+2. Update calcElizSignal: tp1 = entryPrice * (1 + TP1_PCT), stopLoss = entryPrice * (1 - SL_PCT)
+3. Update runBacktest: BACKTEST_MIN_SCORE=4, EVAL_CANDLES=18, require EMA20 AND EMA50 bullish
+4. Bump localStorage key to v3 in usePersistedSignals to invalidate stale signals
+5. Validate and deploy

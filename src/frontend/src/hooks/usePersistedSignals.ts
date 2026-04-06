@@ -3,7 +3,7 @@
  *
  * A signal is stored when first detected and remains active until:
  *   1. 24 hours have passed since detection (MAX_SIGNAL_AGE_MS)
- *   2. The live price touches TP1 (+3%)
+ *   2. The live price touches TP1 (+2%)
  *   3. The live price touches SL  (-2%)
  *
  * The store is keyed by coinId.
@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SignalResult } from "../utils/indicators";
 
-const STORAGE_KEY = "cryptoscalp_signals_v2";
+const STORAGE_KEY = "cryptoscalp_signals_v3";
 const MAX_SIGNAL_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export interface PersistedSignal {
